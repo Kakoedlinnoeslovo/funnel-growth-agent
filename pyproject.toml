@@ -1,0 +1,43 @@
+[project]
+name = "funnel-growth-agent"
+version = "0.1.0"
+description = "Propose and apply landing CTA experiments for recraft-pricing-lab"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+    "google-genai>=1.0",
+    "pydantic>=2.9",
+    "python-dotenv>=1.0",
+    "ruamel.yaml>=0.18",
+    "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.13",
+]
+
+[project.scripts]
+funnel-growth = "funnel_growth_agent.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/funnel_growth_agent"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/funnel_growth_agent/instructions.md" = "funnel_growth_agent/instructions.md"
+"src/funnel_growth_agent/playbook.md" = "funnel_growth_agent/playbook.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP"]

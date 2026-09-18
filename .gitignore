@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+.env
+data/memory/runs.jsonl
+data/creative_analysis/*.json
+.superpowers/
+.DS_Store
