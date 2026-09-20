@@ -14,7 +14,9 @@ UNSUPPORTED = ("guaranteed", "best in the world", "#1 ai", "unlimited free pro")
 
 
 def score_proposal(proposal: SavedProposal | LandingProposal | NoExperiment, context: dict[str, Any]) -> dict[str, Any]:
+    baseline_version = ""
     if isinstance(proposal, SavedProposal):
+        baseline_version = (proposal.baseline.version or "").lower()
         decision = proposal.decision
         evidence = proposal.evidence
         hypothesis = proposal.hypothesis
@@ -41,7 +43,7 @@ def score_proposal(proposal: SavedProposal | LandingProposal | NoExperiment, con
     grounded = bool(evidence or reason) and (
         decision == "no_experiment"
         or "proxy" in blob
-        or "v6" in blob
+        or (bool(baseline_version) and baseline_version in blob)
         or "cta" in blob
         or "ad" in blob
         or any(token in context_blob for token in blob.split() if len(token) > 4)

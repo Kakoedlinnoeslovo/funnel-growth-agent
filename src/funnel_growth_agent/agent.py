@@ -72,7 +72,9 @@ class ToolLoop:
     def system_prompt(self) -> str:
         instructions = self.settings.instructions_path.read_text(encoding="utf-8")
         playbook = self.settings.playbook_path.read_text(encoding="utf-8")
-        return instructions.strip() + "\n\n" + playbook.strip()
+        base = self.settings.base_version
+        header = f"Base landing version: {base} (the funnel `/` serves; variants are copies of it)."
+        return header + "\n\n" + instructions.strip() + "\n\n" + playbook.strip()
 
     def execute(self, name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
         self.calls += 1

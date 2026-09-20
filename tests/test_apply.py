@@ -114,3 +114,33 @@ def test_forbidden_media_change_is_rejected(settings) -> None:
     raw["changes"]["video"] = {"src": "clip.mp4"}
     with pytest.raises(Exception):
         LandingProposal.model_validate(raw)
+
+
+def test_variant_description_is_one_clean_sentence() -> None:
+    from funnel_growth_agent.apply import DESCRIPTION_MAX, describe_variant
+
+    long = "The hero CTA is generic. " + "Second sentence that should be dropped. " * 5
+    line = describe_variant("v8_a1", long)
+    assert line == "Agent hero-copy experiment v8_a1: The hero CTA is generic."
+    huge = describe_variant("v8_a1", "word " * 80)
+    assert len(huge) <= DESCRIPTION_MAX
+    assert huge.endswith("…")
+    assert describe_variant("v8_a1", None) == "Agent hero-copy experiment v8_a1"
+
+
+def test_apply_keeps_site_comments_and_list_style(settings) -> None:
+    settings.site_path.write_text(
+        "# top comment\ndefault_version: v7\npublished_versions:\n  - v7\n"
+        "# trailing comment\nversions:\n  v7: Onboarding quiz\n",
+        encoding="utf-8",
+    )
+    saved = propose(settings, model=ScriptedModel(_proposal()))
+    apply_run(settings, saved.run_id, validate=lambda _d: None)
+    site = settings.site_path.read_text()
+    assert "# top comment" in site
+    assert "# trailing comment" in site
+    assert "  - v7\n" in site and "  - v7_a1\n" in site
+    # The new entry goes right after v7; the comment that followed the list still follows it.
+    assert site.index("  - v7_a1\n") < site.index("# trailing comment")
+    landing = (settings.pricing_lab_dir / "funnels" / "v7_a1" / "steps" / "landing.yaml").read_text()
+    assert "    - component: kittl-hero\n" in landing

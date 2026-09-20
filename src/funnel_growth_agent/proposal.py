@@ -72,6 +72,7 @@ def envelope_from_output(
             creative_evidence=creative_evidence,
             decision="no_experiment",
             reason=output.reason,
+            other_ideas=output.other_ideas,
         )
     return SavedProposal(
         run_id=run_id,

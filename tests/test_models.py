@@ -73,6 +73,18 @@ def test_no_experiment_is_valid_without_changes() -> None:
     assert proposal.reason.startswith("No strong")
 
 
+def test_no_experiment_keeps_other_ideas() -> None:
+    proposal = parse_model_output(
+        {
+            "decision": "no_experiment",
+            "reason": "A proposal is already queued.",
+            "otherIdeas": ["Apply the queued run first."],
+        }
+    )
+    assert isinstance(proposal, NoExperiment)
+    assert proposal.other_ideas == ["Apply the queued run first."]
+
+
 def test_composition_and_hero_layout_are_rejected_on_claude_output() -> None:
     with pytest.raises(ValidationError):
         parse_model_output(

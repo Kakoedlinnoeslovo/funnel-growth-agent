@@ -105,6 +105,8 @@ class NoExperiment(BaseModel):
 
     decision: Literal["no_experiment"] = "no_experiment"
     reason: str
+    # The model often still lists what it would try next; keep it instead of failing.
+    other_ideas: list[str] = Field(default_factory=list, alias="otherIdeas")
 
 
 ModelOutput = Annotated[LandingProposal | NoExperiment, Field(discriminator="decision")]
@@ -168,6 +170,14 @@ class CreativeAnalysis(BaseModel):
     visible_text: list[str] = Field(default_factory=list, alias="visibleText")
     product_claims: list[str] = Field(default_factory=list, alias="productClaims")
     suggested_landing_theme: str = Field(alias="suggestedLandingTheme")
+
+    @field_validator("visible_text", "product_claims", mode="before")
+    @classmethod
+    def _lines_to_list(cls, value: Any) -> Any:
+        # Gemini sometimes returns one newline-joined string instead of a list.
+        if isinstance(value, str):
+            return [line.strip() for line in value.splitlines() if line.strip()]
+        return value
 
 
 class CachedCreativeAnalysis(BaseModel):

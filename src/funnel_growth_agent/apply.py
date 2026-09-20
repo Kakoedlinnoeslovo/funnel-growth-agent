@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -20,6 +21,10 @@ Validate = Callable[[Path], None]
 _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.width = 4096
+# Match the pricing-lab's hand-written style so a variant diffs only where copy changed.
+_yaml.indent(mapping=2, sequence=4, offset=2)
+
+DESCRIPTION_MAX = 180
 
 HERO_TEXT = {"headline", "subhead", "ctaLabel", "reassurance"}
 SECTION_COMPONENTS = {"kittl-hero", "video-cta", "final-cta"}
@@ -133,7 +138,7 @@ def hard_diff_variant(base_dir: Path, variant_dir: Path) -> None:
     base_files = _walk_files(base_dir)
     variant_files = _walk_files(variant_dir)
     if set(base_files) != set(variant_files):
-        raise ApplyError("hard-diff allowlist: variant file set differs from v7")
+        raise ApplyError("hard-diff allowlist: variant file set differs from the base version")
     for rel, base_path in base_files.items():
         variant_path = variant_files[rel]
         if base_path.read_bytes() == variant_path.read_bytes():
@@ -179,17 +184,42 @@ def hard_diff_site(original: bytes, updated: Path, variant: str) -> None:
         raise ApplyError("hard-diff allowlist: site.yaml changed outside published_versions/versions")
 
 
+def describe_variant(variant: str, problem: str | None) -> str:
+    """One line for site.yaml `versions`: what the variant is, then the first sentence of why."""
+    label = f"Agent hero-copy experiment {variant}"
+    text = " ".join((problem or "").split())
+    if not text:
+        return label
+    first = re.split(r"(?<=[.!?])\s", text, maxsplit=1)[0]
+    line = f"{label}: {first}"
+    if len(line) > DESCRIPTION_MAX:
+        line = line[: DESCRIPTION_MAX - 1].rsplit(" ", 1)[0] + "…"
+    return line
+
+
+def _append_keeping_trailing_comment(seq: Any, value: str) -> None:
+    """Append to a ruamel sequence so a comment that followed its last item still follows it."""
+    last = len(seq) - 1
+    comments = getattr(getattr(seq, "ca", None), "items", None)
+    trailing = comments.pop(last, None) if comments is not None and last >= 0 else None
+    seq.append(value)
+    if trailing is not None:
+        comments[len(seq) - 1] = trailing
+
+
 def patch_site(site_path: Path, variant: str, problem: str | None) -> None:
     doc = _load(site_path)
-    published = list(doc.get("published_versions") or [])
-    if variant not in published:
-        published.append(variant)
-        doc["published_versions"] = published
+    # Mutate the existing sequence: replacing it would drop the comments ruamel keeps on it.
+    published = doc.get("published_versions")
+    if published is None:
+        doc["published_versions"] = [variant]
+    elif variant not in published:
+        _append_keeping_trailing_comment(published, variant)
     versions = doc.get("versions")
     if versions is None:
         doc["versions"] = {}
         versions = doc["versions"]
-    versions[variant] = (problem or f"Hero copy experiment {variant}")[:180]
+    versions[variant] = describe_variant(variant, problem)
     _dump(site_path, doc)
 
 
@@ -223,13 +253,15 @@ def apply_run(
         raise ApplyError("no_experiment cannot be applied")
     current = landing_hash(settings.landing_path)
     if current != proposal.base_landing_hash:
-        raise ApplyError("stale base hash: v7 landing drifted since propose")
+        raise ApplyError(
+            f"stale base hash: {settings.base_version} landing drifted since propose"
+        )
     variant = next_variant_name(settings)
     dest = settings.pricing_lab_dir / "funnels" / variant
     if dest.exists():
         raise ApplyError(f"{variant} already exists; refuse overwrite")
     funnels = settings.pricing_lab_dir / "funnels"
-    v7_bytes = settings.landing_path.read_bytes()
+    base_bytes = settings.landing_path.read_bytes()
     site_original = settings.site_path.read_bytes()
     validator = validate or (lambda directory: default_validate(directory, settings))
 
@@ -250,16 +282,16 @@ def apply_run(
         shutil.move(str(tmp_variant), str(dest))
         settings.site_path.write_bytes((tmp_funnels / "site.yaml").read_bytes())
 
-    if settings.landing_path.read_bytes() != v7_bytes:
-        raise RuntimeError("v7 landing bytes changed during apply")
+    if settings.landing_path.read_bytes() != base_bytes:
+        raise RuntimeError(f"{settings.base_version} landing bytes changed during apply")
     update_run(settings, run_id, status="applied", variant=variant)
     return (
         f"Created {variant}\n\n"
         "✓ proposal valid\n"
         "✓ base hash matches\n"
-        "✓ v7 unchanged\n"
+        f"✓ {settings.base_version} unchanged\n"
         "✓ only allowed landing fields changed\n"
-        "✓ default_version remains v7\n"
+        f"✓ default_version remains {settings.base_version}\n"
         f"✓ {variant} added to published_versions\n"
         "✓ funnel validation passed\n\n"
         "Preview:\n\n"

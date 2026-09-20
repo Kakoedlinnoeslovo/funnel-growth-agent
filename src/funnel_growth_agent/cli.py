@@ -20,7 +20,11 @@ def _settings() -> Settings:
 def format_propose(proposal: SavedProposal, *, include_apply: bool) -> str:
     lines: list[str] = [f"Proposal: {proposal.run_id}", ""]
     if proposal.decision == "no_experiment":
-        lines += ["no_experiment", proposal.reason or "", "", "No files were modified"]
+        lines += ["no_experiment", proposal.reason or ""]
+        if proposal.other_ideas:
+            lines += ["", "Alternative ideas", "-----------------"]
+            lines += [f"{i}. {idea}" for i, idea in enumerate(proposal.other_ideas, start=1)]
+        lines += ["", "No files were modified"]
         return "\n".join(lines)
     baseline = proposal.baseline
     proxy = " proxy" if baseline.is_proxy else ""

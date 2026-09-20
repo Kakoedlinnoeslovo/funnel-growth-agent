@@ -70,17 +70,25 @@ def baseline_from_report(
     report: dict[str, Any],
     *,
     base_version: str,
+    min_landing_people: int = 0,
     source: str = "growth-loop",
 ) -> Baseline | None:
+    """Pick the flow to measure against.
+
+    The base version's own flow wins whenever it has at least `min_landing_people`.
+    Otherwise the busiest quiz flow stands in as a proxy (is_proxy=True).
+    """
     flows = list(report.get("ph_flows") or [])
     if not flows:
         return None
 
-    def score(flow: dict[str, Any]) -> tuple[int, int]:
-        quiz = 1 if flow.get("funnel_id") in QUIZ_FUNNEL_IDS or str(flow.get("funnel_id", "")).startswith(
-            "recraft-quiz"
-        ) else 0
-        return (quiz, int(flow.get("landing_people") or 0))
+    def score(flow: dict[str, Any]) -> tuple[int, int, int]:
+        funnel_id = str(flow.get("funnel_id") or "")
+        quiz = 1 if funnel_id in QUIZ_FUNNEL_IDS or funnel_id.startswith("recraft-quiz") else 0
+        people = int(flow.get("landing_people") or 0)
+        is_base = str(flow.get("funnel_version") or "") == base_version
+        base_ok = 1 if is_base and people >= min_landing_people else 0
+        return (base_ok, quiz, people)
 
     flow = max(flows, key=score)
     landing_row = next((row for row in flow.get("rows") or [] if row.get("node_id") == "landing"), None)
@@ -134,7 +142,11 @@ def get_landing_cta_metrics(settings: Settings) -> MetricsSlice:
     path = Path(str(primary.get("_path") or settings.reports_dir))
     now = settings.clock()
     age = _age_hours(primary, path, now)
-    baseline = baseline_from_report(primary, base_version=settings.base_version)
+    baseline = baseline_from_report(
+        primary,
+        base_version=settings.base_version,
+        min_landing_people=settings.min_landing_people,
+    )
     if baseline is None:
         raise StaleReportError(
             "Cannot generate proposal.\n\nLatest analytics report has no funnel flows."
@@ -157,7 +169,11 @@ def get_landing_cta_metrics(settings: Settings) -> MetricsSlice:
         )
     daily_baseline = None
     if weekly is not None and daily is not None:
-        daily_baseline = baseline_from_report(daily, base_version=settings.base_version)
+        daily_baseline = baseline_from_report(
+            daily,
+            base_version=settings.base_version,
+            min_landing_people=settings.min_landing_people,
+        )
     return MetricsSlice(
         generated_at=str(primary.get("generated_at") or ""),
         age_hours=round(age, 2),

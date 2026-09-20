@@ -95,3 +95,21 @@ def test_fingerprint_uses_sha_when_file_exists(tmp_path: Path) -> None:
     first = asset_fingerprint(path)
     path.write_bytes(b"abcd")
     assert first != asset_fingerprint(path)
+
+
+def test_analysis_schema_accepts_newline_string_for_list_fields() -> None:
+    from funnel_growth_agent.models import CreativeAnalysis
+
+    parsed = CreativeAnalysis.model_validate(
+        {
+            "visualHook": "Colour swatch",
+            "primaryPromise": "Your colours as vectors",
+            "audienceIntent": "designers",
+            "ctaIntent": "try",
+            "visibleText": "Your colors.\n545516\nPOSH",
+            "productClaims": "",
+            "suggestedLandingTheme": "vector colours",
+        }
+    )
+    assert parsed.visible_text == ["Your colors.", "545516", "POSH"]
+    assert parsed.product_claims == []

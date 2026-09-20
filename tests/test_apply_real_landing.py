@@ -3,12 +3,23 @@ from __future__ import annotations
 from pathlib import Path
 
 from funnel_growth_agent.apply import apply_run
+from funnel_growth_agent.config import load_settings
 from funnel_growth_agent.models import LandingProposal
 from funnel_growth_agent.proposal import propose
 
-REAL_LANDING = Path("/Users/roman/Desktop/all/recraft-pricing-lab/funnels/v7/steps/landing.yaml")
-REAL_FUNNEL = Path("/Users/roman/Desktop/all/recraft-pricing-lab/funnels/v7/funnel.yaml")
-REAL_PLAN = Path("/Users/roman/Desktop/all/recraft-pricing-lab/funnels/v7/steps/plan.yaml")
+# Real pricing-lab checkout and its current default version, resolved from .env / site.yaml.
+# Skipped when the checkout is absent (CI, fresh clone).
+try:
+    _real = load_settings()
+    REAL_LAB: Path | None = _real.pricing_lab_dir
+    REAL_VERSION = _real.base_version
+except (FileNotFoundError, ValueError):
+    REAL_LAB = None
+    REAL_VERSION = ""
+REAL_STEPS = (REAL_LAB or Path()) / "funnels" / REAL_VERSION / "steps"
+REAL_LANDING = REAL_STEPS / "landing.yaml"
+REAL_FUNNEL = REAL_STEPS.parent / "funnel.yaml"
+REAL_PLAN = REAL_STEPS / "plan.yaml"
 
 
 class ScriptedModel:
@@ -32,8 +43,8 @@ class ScriptedModel:
         )
 
 
-def test_apply_patches_real_v7_landing_without_touching_paywall(settings) -> None:
-    if not REAL_LANDING.is_file():
+def test_apply_patches_real_landing_without_touching_paywall(settings) -> None:
+    if REAL_LAB is None or not REAL_LANDING.is_file():
         return
     settings.landing_path.write_bytes(REAL_LANDING.read_bytes())
     settings.funnel_path.write_bytes(REAL_FUNNEL.read_bytes())
@@ -47,7 +58,7 @@ def test_apply_patches_real_v7_landing_without_touching_paywall(settings) -> Non
     variant_plan = (settings.pricing_lab_dir / "funnels" / "v7_a1" / "steps" / "plan.yaml").read_text()
     assert "Convert my image" in variant_landing
     assert "Convert a file" in variant_landing
-    assert "paywallId: v7-quiz" in variant_plan
+    assert f"paywallId: {REAL_VERSION}-quiz" in variant_plan
     assert variant_plan == paywall_before
     assert settings.landing_path.read_bytes() == before
     assert "video:" in variant_landing

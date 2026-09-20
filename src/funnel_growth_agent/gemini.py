@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -128,7 +129,13 @@ def analyze_creative(
         try:
             analysis = runner(creative, asset)
             model_name = settings.gemini_model
-        except Exception:
+        except Exception as error:
+            # Loud, not fatal: a silent fallback hid a retired Gemini model for days.
+            print(
+                f"warning: creative {creative.creative_id} analysis fell back to title/body: "
+                f"{type(error).__name__}: {str(error)[:200]}",
+                file=sys.stderr,
+            )
             analysis = _fallback(creative)
             model_name = "title-body-fallback"
 

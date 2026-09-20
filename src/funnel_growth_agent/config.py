@@ -8,9 +8,11 @@ from datetime import datetime
 from pathlib import Path
 
 from dotenv import load_dotenv
+from ruamel.yaml import YAML
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 REPO_DIR = PACKAGE_DIR.parent.parent
+_yaml = YAML(typ="safe")
 
 
 def _path(value: str | None, default: Path) -> Path:
@@ -22,7 +24,7 @@ class Settings:
     growth_loop_dir: Path
     pricing_lab_dir: Path
     data_dir: Path
-    base_version: str = "v7"
+    base_version: str
     max_report_age_hours: float = 48
     min_landing_people: int = 100
     min_creative_spend: float = 5.0
@@ -31,7 +33,7 @@ class Settings:
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-sonnet-4-6"
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.6-flash"
     analysis_schema_version: int = 1
     now: str | None = None
 
@@ -73,13 +75,34 @@ class Settings:
         return datetime.now()
 
 
+def read_default_version(site_path: Path) -> str:
+    """The funnel version `/` shows: `default_version` in funnels/site.yaml."""
+    if not site_path.is_file():
+        raise FileNotFoundError(
+            f"Cannot resolve base version: {site_path} not found. "
+            "Point PRICING_LAB_DIR at the pricing-lab checkout, or set BASE_VERSION to override."
+        )
+    doc = _yaml.load(site_path.read_text(encoding="utf-8")) or {}
+    version = doc.get("default_version")
+    if not version:
+        raise ValueError(f"{site_path} has no default_version")
+    return str(version)
+
+
 def load_settings() -> Settings:
     load_dotenv(REPO_DIR / ".env")
+    pricing_lab_dir = _path(
+        os.getenv("PRICING_LAB_DIR"), REPO_DIR.parent / "recraft-pricing-performance"
+    )
+    # BASE_VERSION is an explicit override; otherwise follow whatever `/` currently serves.
+    base_version = os.getenv("BASE_VERSION") or read_default_version(
+        pricing_lab_dir / "funnels" / "site.yaml"
+    )
     return Settings(
         growth_loop_dir=_path(os.getenv("GROWTH_LOOP_DIR"), REPO_DIR.parent / "growth-loop"),
-        pricing_lab_dir=_path(os.getenv("PRICING_LAB_DIR"), REPO_DIR.parent / "recraft-pricing-lab"),
+        pricing_lab_dir=pricing_lab_dir,
         data_dir=_path(os.getenv("FUNNEL_GROWTH_DATA_DIR"), REPO_DIR / "data"),
-        base_version=os.getenv("BASE_VERSION", "v7"),
+        base_version=base_version,
         max_report_age_hours=float(os.getenv("MAX_REPORT_AGE_HOURS", "48")),
         min_landing_people=int(os.getenv("MIN_LANDING_PEOPLE", "100")),
         min_creative_spend=float(os.getenv("MIN_CREATIVE_SPEND", "5")),
@@ -87,5 +110,5 @@ def load_settings() -> Settings:
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
         anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
-        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
     )
