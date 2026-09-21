@@ -95,6 +95,16 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
 .preflight li{padding:2px 0;color:var(--muted)}
 .preflight li.ok{color:var(--soft)}
 #empty{color:var(--muted);padding:24px 8px}
+#now{display:none;gap:8px;align-items:center;padding:10px 16px;border-top:1px solid var(--line);font-size:12px;flex:none}
+#now.on{display:flex}
+#now .dot{width:8px;height:8px;border-radius:50%;border:2px solid var(--fg);flex:none;animation:pulse 1s infinite}
+#now .what{color:var(--soft);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#now .secs{color:var(--muted);margin-left:auto;flex:none;font-variant-numeric:tabular-nums}
+.card.pending{border-style:dashed;background:transparent}
+.card.pending h3{color:var(--soft)}
+.pdot{width:8px;height:8px;border-radius:50%;border:2px solid var(--fg);flex:none;animation:pulse 1s infinite}
+.skel{display:flex;flex-direction:column;gap:6px;padding:2px 0}
+.skel i{height:10px;border-radius:4px;background:var(--line);animation:pulse 1.2s infinite}
 @media (max-width:900px){body{grid-template-columns:1fr;grid-template-rows:45vh 1fr}#left{border-right:0;border-bottom:1px solid var(--line)}}
 </style>
 </head>
@@ -113,6 +123,7 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     <button class="btn lime" id="apply" disabled>Apply<kbd>A</kbd></button>
   </div>
   <div id="feed"><div id="empty">Press <b>R</b> to run the agent.</div></div>
+  <div id="now"><span class="dot"></span><span class="what"></span><span class="secs"></span></div>
 </div>
 <script>
 (() => {
@@ -120,7 +131,7 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
   const feed = $('#feed'), frame = $('#frame'), urlbar = $('#urlbar');
   const st = { mode: 'replay', status: 'idle', base: '', previewBase: '', variant: null, reloadDelayMs: 0, canApply: false };
   const ctx = { landing: null, analyses: {}, ranked: {} };
-  const cards = {}, tools = {}, tiles = {};
+  const cards = {}, tools = {}, tiles = {}, shellTimer = {};
   let proposalOutput = null;
 
   const TOOL_LABEL = {
@@ -133,6 +144,18 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     research_landing: 'Researching a competitor landing',
     get_showcase_style: 'Reading the showcase style',
   };
+  // Tools whose result renders a card. The shell is drawn when the call starts.
+  const TOOL_CARD = {
+    get_landing_cta_metrics: ['evidence', 'Evidence · last week'],
+    get_top_creatives: ['creatives', 'Winning creatives', 'ranked by software'],
+    get_current_landing: ['landing', 'Current landing'],
+    get_previous_runs: ['memory', 'Memory'],
+    research_landing: ['research', 'Competitor research'],
+    get_showcase_style: ['style', 'House style read'],
+  };
+  const toolLabel = (d) => (d.name === 'research_landing' && d.input && d.input.url)
+    ? 'Researching ' + String(d.input.url).replace(/^https?:\/\//, '').replace(/\/$/, '')
+    : (TOOL_LABEL[d.name] || d.name);
 
   // ---------- tiny DOM helpers (all model text goes through textContent)
   const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
@@ -149,6 +172,97 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     return body;
   }
   const scrollDown = () => { feed.scrollTop = feed.scrollHeight; };
+  const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
+  // A card body that may already exist as a skeleton shell. Returns null when it is
+  // already filled, so the once-only render guards keep their old meaning.
+  function fill(id, title, pill) {
+    const body = cards[id];
+    if (body) { if (body.dataset.filled) return null; clear(body); }
+    const out = body || card(id, title, { pill: pill });
+    if (out.parentNode) out.parentNode.classList.remove('pending');
+    out.dataset.filled = '1';
+    return out;
+  }
+  function shell(id, title, pill) {
+    if (cards[id]) return;
+    const body = card(id, title, { pill: pill });
+    if (body.parentNode) body.parentNode.classList.add('pending');
+    const sk = el('div', 'skel');
+    [70, 45, 60].forEach(w => { const bar = el('i'); bar.style.width = w + '%'; sk.appendChild(bar); });
+    body.appendChild(sk);
+  }
+  function retitle(id, title) {
+    const body = cards[id]; if (!body) return;
+    const h = body.parentNode && body.parentNode.querySelector('h3');
+    if (h) h.childNodes[0] ? (h.childNodes[0].textContent = title) : h.appendChild(el('span', null, title));
+  }
+
+  // ---------- "Thinking": the model turns emit nothing, so the feed would sit empty.
+  // 2.5s is above replay's slowest pacing (1.4s), so this never shows on a staged replay.
+  let thinkTimer = 0, thinkEl = null;
+  function dropThinking() {
+    if (thinkTimer) { clearTimeout(thinkTimer); thinkTimer = 0; }
+    if (thinkEl) { thinkEl.remove(); thinkEl = null; }
+  }
+  function showThinking() {
+    thinkTimer = 0;
+    if (st.status !== 'proposing' || thinkEl) return;
+    const c = el('div', 'card pending');
+    const h = el('h3'); h.appendChild(el('span', 'pdot')); h.appendChild(el('span', null, 'Thinking'));
+    c.appendChild(h);
+    c.appendChild(el('div', 'muted', 'The model is writing. There is nothing to show until it answers.'));
+    const empty = $('#empty'); if (empty) empty.remove();
+    thinkEl = c; feed.appendChild(c); scrollDown();
+  }
+
+  // ---------- activity bar: what the agent is doing right now
+  const now = { el: $('#now'), what: $('#now .what'), secs: $('#now .secs'), since: 0, timer: 0 };
+  function tick() {
+    if (!now.since) return;
+    now.secs.textContent = Math.round((Date.now() - now.since) / 1000) + 's';
+  }
+  function working(label) {
+    // A null label means "same step, fresh clock" (e.g. the next tile candidate).
+    if (label) now.what.textContent = label;
+    else if (!now.el.classList.contains('on')) return;
+    now.since = Date.now();
+    now.secs.textContent = '0s';
+    now.el.classList.add('on');
+    if (!now.timer) now.timer = setInterval(tick, 1000);
+  }
+  function armNow() {
+    if (!now.what.textContent) now.what.textContent = 'Starting';
+    if (!now.since) { now.since = Date.now(); now.secs.textContent = '0s'; }
+    now.el.classList.add('on');
+    if (!now.timer) now.timer = setInterval(tick, 1000);
+  }
+  function restNow() {
+    now.el.classList.remove('on');
+    now.since = 0;
+    if (now.timer) { clearInterval(now.timer); now.timer = 0; }
+  }
+  // apply.py emits a stage AFTER it finishes (except `validate`, emitted before each run),
+  // so the live label is the step that starts next, not the one just announced.
+  const STAGE_DOING = {
+    copy: 'Making the video and the tiles',
+    media: 'Making the video and the tiles',
+    patch: 'Checking every changed field',
+    diff: 'Validating the funnel',
+    validate: 'Validating the funnel',
+    publish: 'Publishing the new version',
+  };
+  const NOW_LABEL = {
+    propose_started: () => "Reading last week's numbers and the winning ads",
+    context_ready: () => 'Thinking about what to check first',
+    tool_call: (d) => toolLabel(d),
+    tool_result: () => 'Thinking',
+    apply_started: () => 'Copying the base version',
+    apply_stage: (d) => (STAGE_DOING[d.stage] || d.stage)
+      + (d.stage === 'media' && d.message ? ' · ' + d.message : ''),
+    tile_started: (d) => `Drawing options for ${d.group}`,
+    tile_candidate: () => null,
+    tile_judged: () => 'Picking the best option',
+  };
 
   // ---------- state
   function applyState(s) {
@@ -157,6 +271,8 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     $('#run').disabled = s.status !== 'idle';
     $('#apply').disabled = !(s.status === 'proposed' && s.canApply);
     $('#reset').style.display = s.mode === 'replay' ? '' : 'none';
+    if (s.status === 'proposing' || s.status === 'applying') armNow();
+    else { restNow(); dropThinking(); }
     if (frame.src === 'about:blank' && s.previewBase) showPage(s.baseVersion, false);
     if (s.status === 'live' && s.variant && !urlbar.classList.contains('is-live')) showPage(s.variant, true);
     if (s.error && !cards.error) card('error', 'Error').appendChild(el('div', 'pre', s.error));
@@ -187,12 +303,16 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
   function onToolCall(d) {
     const ul = cards.agent && cards.agent.querySelector('.tools'); if (!ul) return;
     const li = el('li', 'active'); li.appendChild(el('span', 'dot'));
-    let label = TOOL_LABEL[d.name] || d.name;
-    if (d.name === 'research_landing' && d.input && d.input.url) label = 'Researching ' + String(d.input.url).replace(/^https?:\/\//, '').replace(/\/$/, '');
-    li.appendChild(el('span', null, label)); ul.appendChild(li); tools[d.id] = li; scrollDown();
+    li.appendChild(el('span', null, toolLabel(d))); ul.appendChild(li); tools[d.id] = li;
+    const spec = TOOL_CARD[d.name];
+    if (spec && !cards[spec[0]] && !shellTimer[spec[0]])
+      shellTimer[spec[0]] = setTimeout(() => { delete shellTimer[spec[0]]; shell(spec[0], spec[1], spec[2]); }, 180);
+    scrollDown();
   }
   function onToolResult(d) {
     const li = tools[d.id]; if (li) { li.classList.remove('active'); li.classList.add('done'); }
+    const pid = (TOOL_CARD[d.name] || [])[0];
+    if (pid && shellTimer[pid]) { clearTimeout(shellTimer[pid]); delete shellTimer[pid]; }
     const r = d.result || {};
     switch (d.name) {
       case 'get_landing_cta_metrics': return evidenceCard(r.baseline);
@@ -205,14 +325,13 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     }
   }
   function evidenceCard(b) {
-    if (!b || cards.evidence) return;
-    const body = card('evidence', 'Evidence · last week');
+    if (!b) return;
+    const body = fill('evidence', 'Evidence · last week'); if (!body) return;
     const k = el('div', 'kpi', pct(b.ctaRate)); k.appendChild(el('small', null, 'landing → CTA')); body.appendChild(k);
     body.appendChild(el('div', 'muted', `${(b.landingPeople || 0).toLocaleString()} landing · ${(b.ctaPeople || 0).toLocaleString()} CTA clicks · ${b.version}${b.isProxy ? ' (proxy)' : ''}${b.period ? ' · ' + b.period : ''}`));
   }
   function creativesCard(rows) {
-    if (cards.creatives) return;
-    const body = card('creatives', 'Winning creatives', { pill: 'ranked by software' });
+    const body = fill('creatives', 'Winning creatives', 'ranked by software'); if (!body) return;
     rows.forEach(r => {
       const row = el('div', 'creative'); row.dataset.id = r.creativeId;
       if (r.imagePath) { const img = el('img'); img.src = assetUrl(r.imagePath); img.alt = ''; row.appendChild(img); } else row.appendChild(el('div', 'ph'));
@@ -235,8 +354,8 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
   }
   const sectionById = (id) => (ctx.landing && ctx.landing.sections || []).find(s => s.id === id) || null;
   function landingCard(l) {
-    if (cards.landing) return;
-    const body = card('landing', `Current landing · ${l.version || st.base}`);
+    const body = fill('landing', 'Current landing'); if (!body) return;
+    retitle('landing', `Current landing · ${l.version || st.base}`);
     const hero = sectionById('kittl-hero') || {};
     body.appendChild(el('div', null, joinHead(hero.headline)));
     if (hero.subhead) body.appendChild(el('div', 'muted', hero.subhead));
@@ -245,12 +364,13 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     (l.sections || []).forEach(s => chips.appendChild(el('span', 'chip', s.id))); body.appendChild(chips);
   }
   function memoryCard(runs) {
-    if (cards.memory) return;
+    const body = fill('memory', 'Memory'); if (!body) return;
     const applied = runs.filter(r => r.status === 'applied').length;
-    card('memory', 'Memory').appendChild(el('div', null, runs.length ? `${runs.length} prior run${runs.length === 1 ? '' : 's'} · ${applied} applied · none evaluated yet` : 'No prior experiments of this type.'));
+    body.appendChild(el('div', null, runs.length ? `${runs.length} prior run${runs.length === 1 ? '' : 's'} · ${applied} applied · none evaluated yet` : 'No prior experiments of this type.'));
   }
   function researchCard(r) {
     const body = cards.research || card('research', 'Competitor research');
+    if (!body.dataset.filled) { clear(body); body.dataset.filled = '1'; }
     const read = r.read || {}; const wrap = el('div', 'creative');
     (r.screenshots || []).slice(0, 1).forEach(p => { const img = el('img'); img.src = assetUrl(p); img.alt = ''; wrap.appendChild(img); });
     const b = el('div', 'body'); b.appendChild(el('div', 'name', String(r.url || '').replace(/^https?:\/\//, '')));
@@ -259,8 +379,7 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     wrap.appendChild(b); body.appendChild(wrap);
   }
   function styleCard(s) {
-    if (cards.style) return;
-    const body = card('style', 'House style read');
+    const body = fill('style', 'House style read'); if (!body) return;
     (s.groups || []).slice(0, 4).forEach(g => body.appendChild(el('div', 'muted', `${g.label}: ${g.family || (g.tiles && g.tiles[0] && g.tiles[0].medium) || ''}`)));
   }
 
@@ -418,7 +537,17 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
       const next = JSON.parse(e.data); applyState(next);
       if (params.get('autoapply') === '1' && next.status === 'proposed' && next.canApply) post('/apply');
     });
-    Object.keys(HANDLERS).forEach(kind => es.addEventListener(kind, (e) => { const ev = JSON.parse(e.data); HANDLERS[kind](ev.data || {}); }));
+    // /events replays the whole buffer on every (re)connect, so drop anything already
+    // handled: researchCard and the tile handlers append unconditionally and would double up.
+    const seen = new Set();
+    Object.keys(HANDLERS).forEach(kind => es.addEventListener(kind, (e) => {
+      const ev = JSON.parse(e.data), data = ev.data || {};
+      if (ev.seq != null) { if (seen.has(ev.seq)) return; seen.add(ev.seq); }
+      dropThinking();
+      const label = NOW_LABEL[kind]; if (label) working(label(data));
+      HANDLERS[kind](data);
+      if (kind === 'context_ready' || kind === 'tool_result') thinkTimer = setTimeout(showThinking, 2500);
+    }));
     if (params.get('autostart') === '1' && s.status === 'idle') post('/start');
   });
 })();
