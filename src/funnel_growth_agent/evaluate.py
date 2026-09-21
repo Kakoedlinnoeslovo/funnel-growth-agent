@@ -12,7 +12,9 @@ from .models import Evaluation, SavedProposal
 FLAT_ABS = 0.005
 
 
-def _flow_for_variant(report: dict[str, Any], variant: str, funnel_id: str | None) -> dict[str, Any] | None:
+def _flow_for_variant(
+    report: dict[str, Any], variant: str, funnel_id: str | None
+) -> dict[str, Any] | None:
     flows = list(report.get("ph_flows") or [])
     for flow in flows:
         if flow.get("funnel_version") == variant:
@@ -26,7 +28,9 @@ def _flow_for_variant(report: dict[str, Any], variant: str, funnel_id: str | Non
 
 def _learning(result: str, variant: str) -> str:
     if result == "insufficient_data":
-        return f"{variant} is missing or below min landing people; wait for the next growth-loop run."
+        return (
+            f"{variant} is missing or below min landing people; wait for the next growth-loop run."
+        )
     if result == "directionally_better":
         return f"{variant} landing→CTA looks higher than the stored proxy baseline; not causal."
     if result == "directionally_worse":
@@ -75,7 +79,11 @@ def evaluate_run(settings: Settings, run_id: str) -> str:
             + "\n\nVariant missing from the latest report. Wait for the next growth-loop run."
         )
 
-    snapshot = {"ph_flows": [flow], "period": report.get("period"), "run_date": report.get("run_date")}
+    snapshot = {
+        "ph_flows": [flow],
+        "period": report.get("period"),
+        "run_date": report.get("run_date"),
+    }
     measured = baseline_from_report(snapshot, base_version=settings.base_version)
     assert measured is not None
     proxy = proposal.baseline.cta_rate
@@ -107,7 +115,9 @@ def evaluate_run(settings: Settings, run_id: str) -> str:
 
 def _format(evaluation: Evaluation, learning: str) -> str:
     rate = "n/a" if evaluation.cta_rate is None else f"{evaluation.cta_rate:.1%}"
-    proxy = "n/a" if evaluation.baseline_proxy_rate is None else f"{evaluation.baseline_proxy_rate:.1%}"
+    proxy = (
+        "n/a" if evaluation.baseline_proxy_rate is None else f"{evaluation.baseline_proxy_rate:.1%}"
+    )
     return (
         f"Variant: {evaluation.variant}\n"
         f"Landing people: {evaluation.landing_people}\n"

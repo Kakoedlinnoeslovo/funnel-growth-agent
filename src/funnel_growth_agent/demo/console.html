@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>funnel-growth console</title>
+<style>
+:root{--bg:#0A0A0A;--fg:#F5F0E8;--card:#161616;--line:#2A2A2A;--muted:#9A9488;--lime:#C6F135;--soft:#C9C4B8;--well:#0F0F0F}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 -apple-system,Inter,sans-serif;display:grid;grid-template-columns:58fr 42fr;overflow:hidden}
+#left{display:flex;flex-direction:column;border-right:1px solid var(--line);min-width:0;min-height:0}
+#urlbar{height:40px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+#urlbar .url{color:var(--fg);font-family:ui-monospace,Menlo,monospace}
+#urlbar .live{display:none;background:var(--lime);color:var(--bg);font-weight:700;padding:1px 8px;border-radius:999px;font-size:11px;letter-spacing:.08em}
+#urlbar.is-live .live{display:inline-block}
+#urlbar a{color:var(--muted);margin-left:auto}
+iframe{flex:1;border:0;background:#fff;width:100%}
+#right{display:flex;flex-direction:column;min-width:0;min-height:0}
+#head{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+#head .title{font-weight:600}
+#head .meta{color:var(--muted);font-size:12px}
+#head .spacer{flex:1}
+.btn{border:1px solid var(--fg);background:transparent;color:var(--fg);border-radius:10px;padding:6px 12px;font:inherit;font-weight:600;cursor:pointer}
+.btn:disabled{opacity:.3;filter:grayscale(1);cursor:default}
+a{color:var(--fg)}
+.btn.lime{background:var(--lime);border-color:var(--lime);color:var(--bg)}
+.btn.quiet{border-color:var(--line);color:var(--muted);font-weight:400}
+kbd{font:11px ui-monospace,Menlo,monospace;border:1px solid var(--line);border-radius:4px;padding:0 4px;margin-left:4px;color:var(--muted)}
+#feed{flex:1;min-height:0;overflow:auto;padding:12px 16px 40vh;scroll-behavior:smooth}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin:0 0 12px;animation:in .35s ease}
+@keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 8px;font-weight:600;display:flex;align-items:center;gap:8px}
+.muted{color:var(--muted)}
+.kpi{font-size:40px;font-weight:700;letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
+.kpi small{font-size:13px;font-weight:400;color:var(--muted);margin-left:8px}
+.pill{display:inline-block;border:1px solid var(--line);color:var(--muted);padding:1px 8px;border-radius:999px;font-size:11px}
+.badge{display:inline-block;background:var(--lime);color:var(--bg);font-weight:700;padding:1px 8px;border-radius:999px;font-size:11px}
+.tools{list-style:none;margin:0;padding:0}
+.tools li{display:flex;gap:8px;align-items:center;padding:3px 0;color:var(--muted)}
+.tools li.done{color:var(--soft)}
+.tools li .dot{width:8px;height:8px;border-radius:50%;border:2px solid var(--muted);flex:none}
+.tools li.active .dot{border-color:var(--fg);animation:pulse 1s infinite}
+.tools li.done .dot{background:var(--fg);border-color:var(--fg)}
+@keyframes pulse{50%{opacity:.3}}
+.creative{display:flex;gap:10px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line)}
+.creative:first-of-type{border-top:0;padding-top:0}
+.creative img,.creative .ph{width:56px;height:56px;border-radius:8px;object-fit:cover;background:#222;flex:none;border:1px solid var(--line)}
+.creative .body{min-width:0;flex:1}
+.creative .name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--soft);font-size:12px}
+.creative .promise{margin-top:2px}
+.creative.pulse{animation:flash .6s ease}
+@keyframes flash{0%{background:#1f1f1f}100%{background:transparent}}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);border-radius:8px;padding:2px 8px;font-size:12px}
+.chip.omit{text-decoration:line-through;color:var(--muted)}
+.chip.moved{border-color:var(--lime)}
+.field{display:grid;grid-template-columns:96px 1fr;gap:4px 10px;padding:5px 0;border-top:1px solid var(--line)}
+.field:first-of-type{border-top:0}
+.field .k{color:var(--muted);font-size:12px;padding-top:2px}
+.before{color:var(--muted);text-decoration:line-through;text-decoration-color:#5A564F}
+.after{color:var(--lime)}
+.sec{color:var(--muted);font-size:12px;margin:10px 0 2px}
+.hyp{min-height:1.4em}
+.hyp .cursor{display:inline-block;width:8px;height:1em;background:var(--fg);vertical-align:-2px;animation:pulse .8s infinite}
+.problem{color:var(--soft)}
+.brief{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line)}
+.brief .sw{display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid var(--line);margin-right:3px;vertical-align:-1px}
+.brief .t{font-size:12px;color:var(--soft)}
+.check{list-style:none;margin:0;padding:0}
+.check li{display:flex;gap:8px;align-items:baseline;padding:3px 0;color:var(--soft)}
+.check li .m{width:14px;flex:none;color:var(--muted)}
+.check li.done .m{color:var(--fg)}
+.check li .msg{color:var(--muted);font-size:12px;margin-left:auto;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}
+.tile .refs{display:flex;gap:6px;margin:6px 0}
+.tile .refs img{width:64px;aspect-ratio:16/9;object-fit:cover;border-radius:6px;border:1px solid var(--line);background:#222}
+.cands{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+.cand{animation:in .4s ease}
+.cand img{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:8px;border:2px solid var(--line);background:#222;display:block;transition:border-color .5s ease,transform .5s ease}
+.cand.chosen img{border-color:var(--lime);transform:scale(1.03)}
+.cand .idx{font-size:11px;color:var(--muted);margin-top:4px;display:flex;justify-content:space-between;align-items:center}
+.cand .badge{opacity:0;transition:opacity .4s}
+.cand.chosen .badge{opacity:1}
+.scores{margin-top:4px}
+.scores .row{display:grid;grid-template-columns:44px 1fr 16px;gap:6px;align-items:center;font-size:10px;color:var(--muted);font-variant-numeric:tabular-nums}
+.bar{height:3px;background:var(--line);border-radius:2px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--soft);transition:width .9s cubic-bezier(.2,.8,.2,1)}
+.cand.chosen .bar i{background:var(--lime)}
+.total{font-size:12px;color:var(--fg);margin-top:4px;font-variant-numeric:tabular-nums}
+.reason{color:var(--muted);font-size:12px;margin-top:8px;opacity:0;transition:opacity .6s}
+.reason.show{opacity:1}
+.livecard{border-color:var(--lime)}
+.pre{white-space:pre-wrap;color:var(--soft);background:var(--well);padding:8px;border-radius:8px;font-size:12px;max-height:140px;overflow:auto}
+.preflight{list-style:none;margin:0;padding:0;font-size:12px}
+.preflight li{padding:2px 0;color:var(--muted)}
+.preflight li.ok{color:var(--soft)}
+#empty{color:var(--muted);padding:24px 8px}
+@media (max-width:900px){body{grid-template-columns:1fr;grid-template-rows:45vh 1fr}#left{border-right:0;border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div id="left">
+  <div id="urlbar"><span class="muted">landing</span><span class="url" id="url">…</span><span class="live">LIVE</span><a href="#" id="reload">reload</a></div>
+  <iframe id="frame" title="landing page" src="about:blank"></iframe>
+</div>
+<div id="right">
+  <div id="head">
+    <span class="title">funnel-growth</span>
+    <span class="meta" id="meta">…</span>
+    <span class="spacer"></span>
+    <button class="btn quiet" id="reset" title="Rehearse again">reset</button>
+    <button class="btn" id="run">Run agent<kbd>R</kbd></button>
+    <button class="btn lime" id="apply" disabled>Apply<kbd>A</kbd></button>
+  </div>
+  <div id="feed"><div id="empty">Press <b>R</b> to run the agent.</div></div>
+</div>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const feed = $('#feed'), frame = $('#frame'), urlbar = $('#urlbar');
+  const st = { mode: 'replay', status: 'idle', base: '', previewBase: '', variant: null, reloadDelayMs: 0, canApply: false };
+  const ctx = { landing: null, analyses: {}, ranked: {} };
+  const cards = {}, tools = {}, tiles = {};
+  let proposalOutput = null;
+
+  const TOOL_LABEL = {
+    get_landing_cta_metrics: "Reading last week's funnel",
+    get_top_creatives: 'Ranking the paid creatives',
+    get_creative_analysis: 'Reading a winning ad',
+    get_current_landing: 'Reading the live landing',
+    get_previous_runs: 'Checking memory',
+    get_media_sources: 'Listing ready clips',
+    research_landing: 'Researching a competitor landing',
+    get_showcase_style: 'Reading the showcase style',
+  };
+
+  // ---------- tiny DOM helpers (all model text goes through textContent)
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+  const assetUrl = (p) => '/asset/' + String(p).split('/').slice(-2).join('/');
+  const money = (n) => '$' + Math.round(n || 0).toLocaleString();
+  const pct = (x) => (100 * x).toFixed(1) + '%';
+  const joinHead = (h) => Array.isArray(h) ? h.join(' ') : (h || '');
+  function card(id, title, opts = {}) {
+    const c = el('div', 'card' + (opts.cls ? ' ' + opts.cls : ''));
+    if (title) { const h = el('h3', null, title); if (opts.pill) h.appendChild(el('span', 'pill', opts.pill)); c.appendChild(h); }
+    const body = el('div'); c.appendChild(body); cards[id] = body;
+    const empty = $('#empty'); if (empty) empty.remove();
+    feed.appendChild(c); feed.scrollTop = feed.scrollHeight;
+    return body;
+  }
+  const scrollDown = () => { feed.scrollTop = feed.scrollHeight; };
+
+  // ---------- state
+  function applyState(s) {
+    Object.assign(st, { mode: s.mode, status: s.status, base: s.baseVersion, previewBase: s.previewBase, variant: s.variant, reloadDelayMs: s.reloadDelayMs, canApply: s.canApply });
+    $('#meta').textContent = `base ${s.baseVersion} · ${s.mode}${s.recording ? ' · ' + s.recording : ''}`;
+    $('#run').disabled = s.status !== 'idle';
+    $('#apply').disabled = !(s.status === 'proposed' && s.canApply);
+    $('#reset').style.display = s.mode === 'replay' ? '' : 'none';
+    if (frame.src === 'about:blank' && s.previewBase) showPage(s.baseVersion, false);
+    if (s.status === 'live' && s.variant && !urlbar.classList.contains('is-live')) showPage(s.variant, true);
+    if (s.error && !cards.error) card('error', 'Error').appendChild(el('div', 'pre', s.error));
+    if (s.status === 'idle' && s.preflight && !cards.preflight) {
+      const b = card('preflight', 'Preflight'); const ul = el('ul', 'preflight');
+      s.preflight.forEach(p => ul.appendChild(el('li', p.ok ? 'ok' : '', (p.ok ? '✓ ' : '✗ ') + p.label)));
+      b.appendChild(ul);
+    }
+  }
+  function showPage(version, live) {
+    const url = `${st.previewBase}/${version}`;
+    $('#url').textContent = url.replace(/^https?:\/\//, '');
+    frame.src = url + (live ? `?d=${Date.now()}` : '');
+    urlbar.classList.toggle('is-live', !!live);
+  }
+  $('#reload').addEventListener('click', (e) => { e.preventDefault(); frame.src = frame.src.split('?')[0] + `?d=${Date.now()}`; });
+
+  // ---------- propose phase
+  function onProposeStarted(d) {
+    const b = card('agent', `Agent · ${d.model || 'claude'} · base ${d.baseVersion}`);
+    b.appendChild(el('ul', 'tools'));
+  }
+  function onContextReady(d) {
+    ctx.landing = d.landing || null;
+    (d.analyses || []).forEach(a => { ctx.analyses[a.creativeId] = a.analysis || {}; });
+    (d.ranked || []).forEach(r => { ctx.ranked[r.creativeId] = r; });
+  }
+  function onToolCall(d) {
+    const ul = cards.agent && cards.agent.querySelector('.tools'); if (!ul) return;
+    const li = el('li', 'active'); li.appendChild(el('span', 'dot'));
+    let label = TOOL_LABEL[d.name] || d.name;
+    if (d.name === 'research_landing' && d.input && d.input.url) label = 'Researching ' + String(d.input.url).replace(/^https?:\/\//, '').replace(/\/$/, '');
+    li.appendChild(el('span', null, label)); ul.appendChild(li); tools[d.id] = li; scrollDown();
+  }
+  function onToolResult(d) {
+    const li = tools[d.id]; if (li) { li.classList.remove('active'); li.classList.add('done'); }
+    const r = d.result || {};
+    switch (d.name) {
+      case 'get_landing_cta_metrics': return evidenceCard(r.baseline);
+      case 'get_top_creatives': return creativesCard(r.creatives || []);
+      case 'get_creative_analysis': return creativeUpdate(r);
+      case 'get_current_landing': ctx.landing = r; return landingCard(r);
+      case 'get_previous_runs': return memoryCard(r.runs || []);
+      case 'research_landing': return researchCard(r);
+      case 'get_showcase_style': return styleCard(r);
+    }
+  }
+  function evidenceCard(b) {
+    if (!b || cards.evidence) return;
+    const body = card('evidence', 'Evidence · last week');
+    const k = el('div', 'kpi', pct(b.ctaRate)); k.appendChild(el('small', null, 'landing → CTA')); body.appendChild(k);
+    body.appendChild(el('div', 'muted', `${(b.landingPeople || 0).toLocaleString()} landing · ${(b.ctaPeople || 0).toLocaleString()} CTA clicks · ${b.version}${b.isProxy ? ' (proxy)' : ''}${b.period ? ' · ' + b.period : ''}`));
+  }
+  function creativesCard(rows) {
+    if (cards.creatives) return;
+    const body = card('creatives', 'Winning creatives', { pill: 'ranked by software' });
+    rows.forEach(r => {
+      const row = el('div', 'creative'); row.dataset.id = r.creativeId;
+      if (r.imagePath) { const img = el('img'); img.src = assetUrl(r.imagePath); img.alt = ''; row.appendChild(img); } else row.appendChild(el('div', 'ph'));
+      const b = el('div', 'body');
+      b.appendChild(el('div', 'name', r.adName || r.creativeId));
+      const stats = [];
+      if (r.spend) stats.push(money(r.spend)); if (r.clicks) stats.push(`${r.clicks} clicks`);
+      if (r.checkouts) stats.push(`${r.checkouts} checkouts`); if (r.payments) stats.push(`${r.payments} payments`);
+      b.appendChild(el('div', 'muted', stats.join(' · ') || r.reasonSelected || ''));
+      const a = ctx.analyses[r.creativeId]; b.appendChild(el('div', 'promise', a && a.primaryPromise ? a.primaryPromise : ''));
+      row.appendChild(b); body.appendChild(row);
+    });
+  }
+  function creativeUpdate(a) {
+    if (!a || !a.creativeId) return;
+    ctx.analyses[a.creativeId] = a.analysis || {};
+    const row = cards.creatives && cards.creatives.querySelector(`.creative[data-id="${CSS.escape(a.creativeId)}"]`); if (!row) return;
+    const p = row.querySelector('.promise'); if (p && a.analysis) p.textContent = a.analysis.primaryPromise || '';
+    row.classList.remove('pulse'); void row.offsetWidth; row.classList.add('pulse');
+  }
+  const sectionById = (id) => (ctx.landing && ctx.landing.sections || []).find(s => s.id === id) || null;
+  function landingCard(l) {
+    if (cards.landing) return;
+    const body = card('landing', `Current landing · ${l.version || st.base}`);
+    const hero = sectionById('kittl-hero') || {};
+    body.appendChild(el('div', null, joinHead(hero.headline)));
+    if (hero.subhead) body.appendChild(el('div', 'muted', hero.subhead));
+    const cta = el('div'); cta.style.marginTop = '6px'; cta.appendChild(el('span', 'pill', hero.ctaLabel || '')); if (hero.layout) cta.appendChild(el('span', 'pill', hero.layout)); body.appendChild(cta);
+    const chips = el('div', 'chips'); chips.style.marginTop = '8px';
+    (l.sections || []).forEach(s => chips.appendChild(el('span', 'chip', s.id))); body.appendChild(chips);
+  }
+  function memoryCard(runs) {
+    if (cards.memory) return;
+    const applied = runs.filter(r => r.status === 'applied').length;
+    card('memory', 'Memory').appendChild(el('div', null, runs.length ? `${runs.length} prior run${runs.length === 1 ? '' : 's'} · ${applied} applied · none evaluated yet` : 'No prior experiments of this type.'));
+  }
+  function researchCard(r) {
+    const body = cards.research || card('research', 'Competitor research');
+    const read = r.read || {}; const wrap = el('div', 'creative');
+    (r.screenshots || []).slice(0, 1).forEach(p => { const img = el('img'); img.src = assetUrl(p); img.alt = ''; wrap.appendChild(img); });
+    const b = el('div', 'body'); b.appendChild(el('div', 'name', String(r.url || '').replace(/^https?:\/\//, '')));
+    if (read.heroHeadline) b.appendChild(el('div', null, `“${read.heroHeadline}” · ${read.primaryCta || ''}`));
+    if (read.notablePatterns && read.notablePatterns.length) b.appendChild(el('div', 'muted', read.notablePatterns[0]));
+    wrap.appendChild(b); body.appendChild(wrap);
+  }
+  function styleCard(s) {
+    if (cards.style) return;
+    const body = card('style', 'House style read');
+    (s.groups || []).slice(0, 4).forEach(g => body.appendChild(el('div', 'muted', `${g.label}: ${g.family || (g.tiles && g.tiles[0] && g.tiles[0].medium) || ''}`)));
+  }
+
+  // ---------- proposal
+  const SECTION_FOR = { hero: 'kittl-hero', videoCta: 'video-cta', finalCta: 'final-cta', inlineCta: 'inline-cta' };
+  const SECTION_TITLE = { hero: 'Hero', videoCta: 'Video CTA', finalCta: 'Final CTA', inlineCta: 'Inline CTA' };
+  function copyParts(out) {
+    const ch = out.changes || {};
+    if (out.experimentType === 'hero_copy') {
+      const hero = {}; ['headline', 'subhead', 'ctaLabel', 'reassurance'].forEach(k => { if (ch[k] != null) hero[k] = ch[k]; });
+      return { hero, videoCta: ch.videoCta, finalCta: ch.finalCta };
+    }
+    return ch.copy || {};
+  }
+  function fieldRow(k, before, after) {
+    const f = el('div', 'field'); f.appendChild(el('div', 'k', k));
+    const v = el('div'); if (before) v.appendChild(el('div', 'before', before)); v.appendChild(el('div', 'after', after)); f.appendChild(v); return f;
+  }
+  function typewrite(node, text, done) {
+    node.textContent = ''; const cur = el('span', 'cursor'); node.appendChild(cur);
+    const step = Math.max(1, Math.ceil(text.length / (3000 / 18))); let i = 0;
+    const tick = () => { i = Math.min(text.length, i + step); node.firstChild.nodeValue = text.slice(0, i); if (i < text.length) setTimeout(tick, 18); else { cur.remove(); done && done(); } };
+    node.insertBefore(document.createTextNode(''), cur); tick();
+  }
+  function onProposal(d) {
+    const out = d.output || {}; proposalOutput = out;
+    if (out.decision === 'no_experiment') {
+      const body = card('proposal', 'Decision', { pill: 'no experiment' });
+      body.appendChild(el('div', null, out.reason || '')); return;
+    }
+    const body = card('proposal', 'Proposal', { pill: out.experimentType || '' });
+    body.appendChild(el('div', 'problem', out.problem || ''));
+    body.appendChild(el('div', 'sec', 'Hypothesis'));
+    const hyp = el('div', 'hyp'); body.appendChild(hyp);
+    typewrite(hyp, out.hypothesis || '', () => { renderChanges(body, out); scrollDown(); });
+  }
+  function renderChanges(body, out) {
+    const parts = copyParts(out); let any = false;
+    Object.keys(SECTION_FOR).forEach(key => {
+      const part = parts[key]; if (!part) return; const base = sectionById(SECTION_FOR[key]) || {};
+      const rows = [];
+      ['headline', 'subhead', 'ctaLabel', 'reassurance'].forEach(f => {
+        if (part[f] == null) return; const after = joinHead(part[f]); const before = joinHead(base[f]);
+        if (after !== before) rows.push([f, before, after]);
+      });
+      if (!rows.length) return; any = true;
+      body.appendChild(el('div', 'sec', SECTION_TITLE[key])); rows.forEach(r => body.appendChild(fieldRow(r[0], r[1], r[2])));
+    });
+    const ch = out.changes || {};
+    if (ch.layout && (ch.layout.layout || ch.layout.stickyCta != null)) {
+      body.appendChild(el('div', 'sec', 'Layout'));
+      const hero = sectionById('kittl-hero') || {};
+      if (ch.layout.layout && ch.layout.layout !== hero.layout) body.appendChild(fieldRow('hero', hero.layout || '', ch.layout.layout));
+      if (ch.layout.stickyCta != null && ch.layout.stickyCta !== hero.stickyCta) body.appendChild(fieldRow('sticky CTA', String(hero.stickyCta ?? ''), String(ch.layout.stickyCta)));
+    }
+    if (ch.composition && (ch.composition.order || ch.composition.omit)) {
+      body.appendChild(el('div', 'sec', 'Section order'));
+      const ids = (ctx.landing && ctx.landing.sections || []).map(s => s.id); const omit = new Set(ch.composition.omit || []);
+      const order = ch.composition.order ? ['kittl-hero'].concat(ch.composition.order) : ids.filter(i => !omit.has(i));
+      const survivors = ids.filter(i => !omit.has(i)); const chips = el('div', 'chips');
+      order.forEach((id, i) => chips.appendChild(el('span', 'chip' + (survivors.indexOf(id) !== i ? ' moved' : ''), id)));
+      ids.filter(i => omit.has(i)).forEach(id => chips.appendChild(el('span', 'chip omit', id)));
+      body.appendChild(chips);
+    }
+    if (ch.media && ch.media.heroVideo) {
+      const v = ch.media.heroVideo; body.appendChild(el('div', 'sec', 'Hero clip'));
+      body.appendChild(fieldRow('clip', (sectionById('kittl-hero') || {}).videoLabel || '', `${v.label} · ${v.source} ${v.videoId || v.creativeId} · ${v.start}s + ${v.duration}s`));
+    }
+    if (ch.media && ch.media.showcase && ch.media.showcase.length) {
+      body.appendChild(el('div', 'sec', `Showcase tiles to generate · ${ch.media.showcase.length}`));
+      ch.media.showcase.forEach(t => {
+        const b = el('div', 'brief'); const sw = el('span'); (t.palette || []).forEach(c => { const s = el('i', 'sw'); s.style.background = c; sw.appendChild(s); }); b.appendChild(sw);
+        const txt = el('div', 't'); txt.appendChild(el('b', null, `${t.group} · slot ${t.slot} · ${t.medium || 'prompt'}`)); txt.appendChild(el('div', null, t.brief || t.prompt || '')); b.appendChild(txt); body.appendChild(b);
+      });
+    }
+    if (!any && !(ch.media)) body.appendChild(el('div', 'muted', 'No field-level changes to show.'));
+  }
+
+  // ---------- apply phase
+  const STAGES = ['copy', 'media', 'patch', 'diff', 'validate', 'publish'];
+  const STAGE_LABEL = { copy: 'Copy the base version', media: 'Produce media', patch: 'Patch the landing', diff: 'Hard-diff against the allowlist', validate: 'Validate the funnel twice', publish: 'Publish atomically' };
+  function onApplyStarted(d) {
+    const body = card('apply', `Apply · ${d.baseVersion} → ${d.variant}`);
+    const ul = el('ul', 'check');
+    STAGES.forEach(s => { const li = el('li'); li.dataset.stage = s; li.appendChild(el('span', 'm', '○')); li.appendChild(el('span', null, STAGE_LABEL[s])); li.appendChild(el('span', 'msg', '')); ul.appendChild(li); });
+    body.appendChild(ul);
+  }
+  function onApplyStage(d) {
+    const ul = cards.apply && cards.apply.querySelector('.check'); if (!ul) return;
+    const idx = STAGES.indexOf(d.stage);
+    ul.querySelectorAll('li').forEach((li, i) => { if (i < idx && !li.classList.contains('done')) { li.classList.add('done'); li.querySelector('.m').textContent = '✓'; } });
+    const li = ul.querySelector(`li[data-stage="${d.stage}"]`); if (!li) return;
+    li.querySelector('.msg').textContent = d.message || '';
+    if (d.stage === 'publish' || (d.stage === 'validate' && /2\/2/.test(d.message || ''))) { li.classList.add('done'); li.querySelector('.m').textContent = '✓'; }
+  }
+  function onTileStarted(d) {
+    const body = card('tile-' + d.stem, `${d.group} · slot ${d.slot}`, { cls: 'tile', pill: `${d.medium || 'prompt'} · ${d.model || ''}` });
+    body.appendChild(el('div', 'problem', d.brief || ''));
+    if (d.references && d.references.length) { const refs = el('div', 'refs'); d.references.forEach(r => { const img = el('img'); img.src = assetUrl(r.path); img.alt = r.ref; img.title = r.ref; refs.appendChild(img); }); body.appendChild(refs); }
+    const cands = el('div', 'cands'); body.appendChild(cands);
+    body.appendChild(el('div', 'reason'));
+    tiles[d.stem] = { body, cands, cand: {} };
+  }
+  function onTileCandidate(d) {
+    const t = tiles[d.stem]; if (!t) return;
+    const c = el('div', 'cand'); const img = el('img'); img.src = assetUrl(d.path); img.alt = `candidate ${d.index}`; c.appendChild(img);
+    const idx = el('div', 'idx'); idx.appendChild(el('span', null, `#${d.index}`)); idx.appendChild(el('span', 'badge', 'chosen')); c.appendChild(idx);
+    c.appendChild(el('div', 'scores')); c.appendChild(el('div', 'total', '')); t.cands.appendChild(c); t.cand[d.index] = c; scrollDown();
+  }
+  const CRIT = [['houseStyle', 'style'], ['subjectClarity', 'subject'], ['cleanliness', 'clean'], ['cropSafety', 'crop'], ['paletteAdherence', 'palette']];
+  function onTileJudged(d) {
+    const t = tiles[d.stem]; if (!t) return;
+    (d.scores || []).forEach((s, n) => {
+      const c = t.cand[s.index]; if (!c) return; const sc = c.querySelector('.scores');
+      const bars = [];
+      CRIT.forEach(([k, label]) => { const row = el('div', 'row'); row.appendChild(el('span', null, label)); const bar = el('div', 'bar'); const fill = el('i'); bar.appendChild(fill); row.appendChild(bar); row.appendChild(el('span', null, String(s[k] ?? 0))); sc.appendChild(row); bars.push([fill, s[k] ?? 0]); });
+      setTimeout(() => { bars.forEach(([fill, v]) => { fill.style.width = (10 * v) + '%'; }); c.querySelector('.total').textContent = `total ${Number(s.total || 0).toFixed(1)}`; }, 120 * n + 60);
+    });
+    setTimeout(() => {
+      const c = t.cand[d.chosen]; if (c) c.classList.add('chosen');
+      const r = t.body.querySelector('.reason'); r.textContent = (d.fallback ? 'Judge fallback: ' : 'Judge: ') + (d.reason || ''); r.classList.add('show'); scrollDown();
+    }, 1100);
+  }
+  function onApplyDone(d) {
+    const body = card('live', `Live · ${d.variant}`, { cls: 'livecard' });
+    const a = el('a', null, d.previewUrl); a.href = d.previewUrl; a.target = '_blank'; body.appendChild(a);
+    body.appendChild(el('div', 'muted', 'The base version and default_version are untouched. Traffic decides next.'));
+    setTimeout(() => showPage(d.variant, true), st.reloadDelayMs || 0);
+  }
+  function onFailed(d) { card('failed', 'Failed').appendChild(el('div', 'pre', d.error || 'unknown error')); }
+
+  // ---------- wiring
+  const HANDLERS = {
+    propose_started: onProposeStarted, context_ready: onContextReady, tool_call: onToolCall, tool_result: onToolResult,
+    proposal: onProposal, proposal_saved: () => {}, propose_failed: onFailed,
+    apply_started: onApplyStarted, apply_stage: onApplyStage, tile_started: onTileStarted, tile_candidate: onTileCandidate,
+    tile_judged: onTileJudged, apply_done: onApplyDone, apply_failed: onFailed,
+  };
+  const post = (path) => fetch(path, { method: 'POST' }).then(r => r.json()).catch(() => ({}));
+  $('#run').addEventListener('click', () => post('/start'));
+  $('#apply').addEventListener('click', () => post('/apply'));
+  $('#reset').addEventListener('click', () => post('/reset').then(() => location.reload()));
+  document.addEventListener('keydown', (e) => {
+    if (e.target && /input|textarea/i.test(e.target.tagName)) return;
+    const k = e.key.toLowerCase();
+    if (k === 'r' && !$('#run').disabled) post('/start');
+    else if (k === 'a' && !$('#apply').disabled) post('/apply');
+    else if (k === 'f') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+  });
+  const params = new URLSearchParams(location.search);
+  fetch('/state').then(r => r.json()).then(s => {
+    applyState(s);
+    const es = new EventSource('/events');
+    es.addEventListener('state', (e) => {
+      const next = JSON.parse(e.data); applyState(next);
+      if (params.get('autoapply') === '1' && next.status === 'proposed' && next.canApply) post('/apply');
+    });
+    Object.keys(HANDLERS).forEach(kind => es.addEventListener(kind, (e) => { const ev = JSON.parse(e.data); HANDLERS[kind](ev.data || {}); }));
+    if (params.get('autostart') === '1' && s.status === 'idle') post('/start');
+  });
+})();
+</script>
+</body>
+</html>

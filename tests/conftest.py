@@ -109,6 +109,50 @@ def sample_report(**overrides: object) -> dict:
     return report
 
 
+# The fake v7 landing mirrors the real v8 section list, so ids resolve the same way:
+# kittl-hero, logo-strip, showcase, inline-cta, style-switcher, inline-cta-2, press-quotes,
+# video-cta, plan-preview, final-cta.
+FAKE_LANDING = (
+    "id: landing\ncomponent: landing\npath: /\ntitle: Landing\nprops:\n"
+    "  pageTitle: Recraft\n  header: banner\n  mobile: phone-first\n  sections:\n"
+    "    - component: kittl-hero\n      layout: copy-first\n      stickyCta: true\n"
+    "      headline: [Drop a JPG., Get an editable SVG.]\n"
+    "      subhead: Upload a logo.\n      ctaLabel: Start Creating\n"
+    "      reassurance: Free to use.\n"
+    "    - component: logo-strip\n      headline: Loved by designers\n"
+    "    - component: showcase\n      headline: [What you can make]\n"
+    "      subhead: Every generation is editable.\n      groups:\n"
+    "        - label: Vectors\n          caption: Logos and icons.\n"
+    "          images: [assets/showcase/vector-1.webp, assets/showcase/vector-2.webp, "
+    "assets/showcase/vector-3.webp]\n"
+    "        - label: Photos\n          caption: Product shots.\n"
+    "          images: [assets/showcase/photo-1.webp, assets/showcase/photo-2.webp, "
+    "assets/showcase/photo-3.webp]\n"
+    "    - component: inline-cta\n      headline: This is what you get back.\n"
+    "      ctaLabel: Start for free\n"
+    "    - component: style-switcher\n      headline: [Consistent styles]\n"
+    "      subhead: Drop in your images.\n"
+    "    - component: inline-cta\n      headline: Your own style.\n"
+    "      ctaLabel: Start for free\n"
+    "    - component: press-quotes\n      quotes:\n"
+    "        - text: Great tool.\n          name: A. Designer\n          role: Studio\n"
+    "    - component: video-cta\n      headline: [Try in Recraft Studio]\n"
+    "      subhead: Studio copy\n      ctaLabel: Try it free\n"
+    "    - component: plan-preview\n      headline: Plans for every kind of creator\n"
+    "    - component: final-cta\n      headline: Ready to start creating?\n"
+    "      subhead: It takes seconds.\n      ctaLabel: Start Creating\n"
+)
+
+FAKE_SHOWCASE_FILES = (
+    "vector-1.webp",
+    "vector-2.webp",
+    "vector-3.webp",
+    "photo-1.webp",
+    "photo-2.webp",
+    "photo-3.webp",
+)
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     reports = tmp_path / "growth-loop" / "data" / "output" / "reports"
@@ -131,22 +175,14 @@ def settings(tmp_path: Path) -> Settings:
         "id: recraft-quiz-v7\ntitle: Onboarding quiz v7\nlandingUser: pricing-lab-v7\nsteps:\n  - landing\n",
         encoding="utf-8",
     )
-    (landing / "landing.yaml").write_text(
-        (
-            "id: landing\ncomponent: landing\npath: /\ntitle: Landing\nprops:\n"
-            "  pageTitle: Recraft\n  sections:\n"
-            "    - component: kittl-hero\n      layout: video-first\n      stickyCta: true\n"
-            "      headline: [Drop a JPG., Get an editable SVG.]\n"
-            "      subhead: Upload a logo.\n      ctaLabel: Start Creating\n"
-            "      reassurance: Free to use.\n"
-            "    - component: logo-strip\n      headline: Loved by designers\n"
-            "    - component: video-cta\n      headline: [Try in Recraft Studio]\n"
-            "      subhead: Studio copy\n      ctaLabel: Try it free\n"
-            "    - component: final-cta\n      headline: Ready to start creating?\n"
-            "      subhead: It takes seconds.\n      ctaLabel: Start Creating\n"
-        ),
-        encoding="utf-8",
-    )
+    (landing / "landing.yaml").write_text(FAKE_LANDING, encoding="utf-8")
+    showcase = lab / "funnels" / "v7" / "assets" / "showcase"
+    showcase.mkdir(parents=True)
+    for name in FAKE_SHOWCASE_FILES:
+        (showcase / name).write_bytes(b"base-image:" + name.encode())
+    shared = lab / "funnels" / "_shared" / "assets"
+    shared.mkdir(parents=True)
+    (shared / "marker.webp").write_bytes(b"shared")
     (lab / "funnels" / "site.yaml").write_text(
         "default_version: v7\npublished_versions:\n  - v7\nversions:\n  v7: Onboarding quiz\n",
         encoding="utf-8",

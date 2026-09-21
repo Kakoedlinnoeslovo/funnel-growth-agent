@@ -128,6 +128,15 @@ def test_variant_description_is_one_clean_sentence() -> None:
     assert describe_variant("v8_a1", None) == "Agent hero-copy experiment v8_a1"
 
 
+def test_apply_refuses_a_run_that_is_already_applied(settings) -> None:
+    saved = propose(settings, model=ScriptedModel(_proposal()))
+    apply_run(settings, saved.run_id, validate=lambda _d: None)
+    with pytest.raises(ValueError, match="applied as v7_a1"):
+        apply_run(settings, saved.run_id, validate=lambda _d: None)
+    assert not (settings.pricing_lab_dir / "funnels" / "v7_a2").exists()
+    assert get_run(settings, saved.run_id).variant == "v7_a1"
+
+
 def test_apply_keeps_site_comments_and_list_style(settings) -> None:
     settings.site_path.write_text(
         "# top comment\ndefault_version: v7\npublished_versions:\n  - v7\n"
@@ -142,5 +151,7 @@ def test_apply_keeps_site_comments_and_list_style(settings) -> None:
     assert "  - v7\n" in site and "  - v7_a1\n" in site
     # The new entry goes right after v7; the comment that followed the list still follows it.
     assert site.index("  - v7_a1\n") < site.index("# trailing comment")
-    landing = (settings.pricing_lab_dir / "funnels" / "v7_a1" / "steps" / "landing.yaml").read_text()
+    landing = (
+        settings.pricing_lab_dir / "funnels" / "v7_a1" / "steps" / "landing.yaml"
+    ).read_text()
     assert "    - component: kittl-hero\n" in landing

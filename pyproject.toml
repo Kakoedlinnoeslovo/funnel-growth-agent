@@ -6,10 +6,12 @@ requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40",
     "google-genai>=1.0",
+    "httpx>=0.27",
     "pydantic>=2.9",
     "python-dotenv>=1.0",
     "ruamel.yaml>=0.18",
     "typer>=0.12",
+    "yt-dlp>=2026.8",
 ]
 
 [project.optional-dependencies]
@@ -31,6 +33,8 @@ packages = ["src/funnel_growth_agent"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/funnel_growth_agent/instructions.md" = "funnel_growth_agent/instructions.md"
 "src/funnel_growth_agent/playbook.md" = "funnel_growth_agent/playbook.md"
+"src/funnel_growth_agent/youtube_catalog.json" = "funnel_growth_agent/youtube_catalog.json"
+"src/funnel_growth_agent/demo/console.html" = "funnel_growth_agent/demo/console.html"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -41,3 +45,6 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["funnel_growth_agent", "conftest", "redesign_helpers"]

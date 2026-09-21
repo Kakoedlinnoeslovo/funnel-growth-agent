@@ -1,0 +1,84 @@
+{
+  "channel": "https://www.youtube.com/@Recraftai",
+  "note": "Recraft's own product videos. Only these ids may be used as a hero clip source; apply downloads with yt-dlp and trims with ffmpeg.",
+  "videos": [
+    {
+      "videoId": "z0r74lakHOM",
+      "title": "Recraft Vectorize: Turn Images into Editable Vectors",
+      "durationSeconds": 89,
+      "topics": ["vectorize", "image to vector", "editable svg", "path editing"]
+    },
+    {
+      "videoId": "U8N6A0aiNN0",
+      "title": "Generate & Edit Vectors in Recraft Studio | New Vector Editing Workflow",
+      "durationSeconds": 182,
+      "topics": ["vector generation", "vector editing", "studio"]
+    },
+    {
+      "videoId": "1nevzOnWTGE",
+      "title": "Recraft V4 Styles",
+      "durationSeconds": 44,
+      "topics": ["styles", "consistency", "brand"]
+    },
+    {
+      "videoId": "wcYV_zoTCqE",
+      "title": "How to Make AI Keep the Same Style Every Time | Recraft V4 Styles",
+      "durationSeconds": 123,
+      "topics": ["styles", "consistency"]
+    },
+    {
+      "videoId": "1X00fOhz11o",
+      "title": "Introducing V4 Styles",
+      "durationSeconds": 132,
+      "topics": ["styles", "launch"]
+    },
+    {
+      "videoId": "VHnfjE6a6nE",
+      "title": "Recraft Editing Templates: The Fastest AI Workflow",
+      "durationSeconds": 88,
+      "topics": ["templates", "editing", "speed"]
+    },
+    {
+      "videoId": "X4i1pbfjZF4",
+      "title": "Mockups in Recraft Studio: Step-by-Step",
+      "durationSeconds": 134,
+      "topics": ["mockups", "product shots"]
+    },
+    {
+      "videoId": "UUYo1rReRQU",
+      "title": "The Easiest Way to Generate AI Videos | Recraft Studio",
+      "durationSeconds": 162,
+      "topics": ["video generation"]
+    },
+    {
+      "videoId": "oiTxyBVbTis",
+      "title": "How to Use an AI Logo Generator: Create Stunning Logos with Recraft V4",
+      "durationSeconds": 194,
+      "topics": ["logo", "branding"]
+    },
+    {
+      "videoId": "gwUbE9D6V-8",
+      "title": "Recraft V4.1",
+      "durationSeconds": 31,
+      "topics": ["model launch", "image generation"]
+    },
+    {
+      "videoId": "ns30Qj4WTwk",
+      "title": "Introducing Recraft V4",
+      "durationSeconds": 124,
+      "topics": ["model launch", "image generation"]
+    },
+    {
+      "videoId": "Pb71_1pIrec",
+      "title": "How to Use Recraft Studio in 2026 | Full Interface Walkthrough",
+      "durationSeconds": 392,
+      "topics": ["studio", "walkthrough", "canvas"]
+    },
+    {
+      "videoId": "yDWEin6ifU4",
+      "title": "How Collections Work in Recraft Studio",
+      "durationSeconds": 109,
+      "topics": ["collections", "organisation"]
+    }
+  ]
+}

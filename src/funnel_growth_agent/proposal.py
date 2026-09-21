@@ -10,8 +10,9 @@ from pydantic import ValidationError
 from .agent import ToolLoop, run_tool_loop
 from .config import Settings
 from .creatives import get_top_creatives
+from .events import EmitData, emit_to
 from .gemini import analyze_ranked
-from .landing import landing_hash
+from .landing import get_current_landing, landing_hash
 from .memory import append_run, list_runs
 from .metrics import get_landing_cta_metrics, load_latest_reports
 from .models import (
@@ -104,7 +105,42 @@ def propose(
     *,
     model: Completer | None = None,
     refresh_creatives: bool = False,
+    browser: Any = None,
+    reader: Any = None,
+    style_reader: Any = None,
+    on_event: EmitData | None = None,
 ) -> SavedProposal:
+    """Propose once. `on_event` (kind, data) sees the pipeline as it runs; see events.py."""
+    try:
+        return _propose(
+            settings,
+            model=model,
+            refresh_creatives=refresh_creatives,
+            browser=browser,
+            reader=reader,
+            style_reader=style_reader,
+            on_event=on_event,
+        )
+    except Exception as error:
+        emit_to(on_event, "propose_failed", {"error": str(error)})
+        raise
+
+
+def _propose(
+    settings: Settings,
+    *,
+    model: Completer | None,
+    refresh_creatives: bool,
+    browser: Any,
+    reader: Any,
+    style_reader: Any,
+    on_event: EmitData | None,
+) -> SavedProposal:
+    emit_to(
+        on_event,
+        "propose_started",
+        {"baseVersion": settings.base_version, "model": settings.anthropic_model},
+    )
     metrics = get_landing_cta_metrics(settings)
     weekly, _daily = load_latest_reports(settings)
     ranked = get_top_creatives(weekly, settings)
@@ -115,12 +151,37 @@ def propose(
         call_model=bool(settings.gemini_api_key),
     )
     landing_sha = landing_hash(settings.landing_path)
-    tools = ToolLoop(settings, ranked=ranked, analyses=analyses, metrics=metrics)
+    emit_to(
+        on_event,
+        "context_ready",
+        {
+            "metrics": metrics.model_dump(by_alias=True),
+            "ranked": [row.model_dump(by_alias=True) for row in ranked],
+            "analyses": [row.model_dump(by_alias=True) for row in analyses],
+            "landing": get_current_landing(settings),
+            "landingHash": landing_sha,
+        },
+    )
+    tools = ToolLoop(
+        settings,
+        ranked=ranked,
+        analyses=analyses,
+        metrics=metrics,
+        browser=browser,
+        style_reader=style_reader,
+        reader=reader,
+        on_event=on_event,
+    )
     if model is None:
         raw = run_tool_loop(settings, tools)
     else:
         raw = model.complete(
-            [{"role": "user", "content": "Propose one landing CTA experiment or no_experiment."}],
+            [
+                {
+                    "role": "user",
+                    "content": "Propose one landing redesign experiment or no_experiment.",
+                }
+            ],
             tools.system_prompt(),
             tools.execute,
         )
@@ -128,6 +189,9 @@ def propose(
         output = _coerce_output(raw)
     except (ValidationError, TypeError, ValueError) as error:
         raise ValueError(f"Invalid model output; no files were written: {error}") from error
+    if model is not None:
+        # The scripted path bypasses run_tool_loop, which is where the live loop emits this.
+        emit_to(on_event, "proposal", {"output": output.model_dump(by_alias=True)})
     saved = envelope_from_output(
         settings,
         output,
@@ -148,5 +212,10 @@ def propose(
             evaluation=None,
             learning=None,
         ),
+    )
+    emit_to(
+        on_event,
+        "proposal_saved",
+        {"runId": saved.run_id, "status": "proposed", "decision": saved.decision},
     )
     return saved

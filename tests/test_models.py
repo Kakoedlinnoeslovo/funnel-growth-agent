@@ -7,6 +7,7 @@ from funnel_growth_agent.models import (
     HeroCopyChanges,
     LandingProposal,
     NoExperiment,
+    RedesignChanges,
     parse_model_output,
 )
 
@@ -132,6 +133,228 @@ def test_forbidden_price_and_media_keys_are_rejected() -> None:
                 "otherIdeas": ["a"],
             }
         )
+
+
+def test_landing_redesign_parses_all_groups() -> None:
+    from redesign_helpers import redesign_payload
+
+    proposal = parse_model_output(redesign_payload())
+    assert isinstance(proposal, LandingProposal)
+    assert isinstance(proposal.changes, RedesignChanges)
+    changes = proposal.changes
+    assert changes.copy_changes.hero.cta_label == "Vectorize my image"
+    assert changes.copy_changes.inline_cta.cta_label == "Vectorize my image"
+    assert changes.layout.layout == "video-first"
+    assert changes.composition.omit == ["style-switcher", "inline-cta-2"]
+    assert changes.media.hero_video.stem == "hero-youtube-z0r74lakhom-30-120"
+    assert changes.media.showcase[0].tile_model == "nano_banana_pro"
+    assert changes.media.showcase[0].references == ["tile:Vectors:1"]
+    dumped = proposal.model_dump(by_alias=True, exclude_none=True)
+    assert "copy" in dumped["changes"] and "heroVideo" in dumped["changes"]["media"]
+    assert LandingProposal.model_validate(dumped).changes == changes
+
+
+def test_redesign_headline_shapes_are_coerced() -> None:
+    changes = RedesignChanges.model_validate(
+        {"copy": {"hero": {"headline": "One line"}, "finalCta": {"headline": ["Two", "lines"]}}}
+    )
+    assert changes.copy_changes.hero.headline == ["One line"]
+    assert changes.copy_changes.final_cta.headline == "Two lines"
+
+
+def test_redesign_rejects_empty_changes() -> None:
+    with pytest.raises(ValidationError, match="empty"):
+        RedesignChanges.model_validate({})
+    with pytest.raises(ValidationError, match="empty"):
+        RedesignChanges.model_validate({"copy": {"hero": {}}, "media": {}})
+    with pytest.raises(ValidationError):
+        RedesignChanges.model_validate({"copy": {"hero": {"ctaLabel": ""}}})
+
+
+def test_redesign_rejects_unknown_keys_and_locked_content() -> None:
+    with pytest.raises(ValidationError):
+        RedesignChanges.model_validate({"copy": {"hero": {"video": {"src": "x.mp4"}}}})
+    with pytest.raises(ValidationError):
+        RedesignChanges.model_validate({"copy": {"inlineCta": {"subhead": "no"}}})
+    with pytest.raises(ValidationError):
+        RedesignChanges.model_validate(
+            {
+                "media": {
+                    "showcase": [
+                        {"group": "Vectors", "slot": 0, "prompt": "x" * 30, "caption": "no"}
+                    ]
+                }
+            }
+        )
+    with pytest.raises(ValidationError):
+        RedesignChanges.model_validate({"prices": {"monthly": 1}})
+
+
+def test_composition_rules() -> None:
+    with pytest.raises(ValidationError, match="at most 2"):
+        RedesignChanges.model_validate({"composition": {"omit": ["a", "b", "c"]}})
+    with pytest.raises(ValidationError, match="kittl-hero"):
+        RedesignChanges.model_validate({"composition": {"order": ["kittl-hero", "logo-strip"]}})
+    with pytest.raises(ValidationError, match="both ordered and omitted"):
+        RedesignChanges.model_validate(
+            {"composition": {"order": ["showcase"], "omit": ["showcase"]}}
+        )
+    with pytest.raises(ValidationError, match="repeat"):
+        RedesignChanges.model_validate({"composition": {"order": ["showcase", "showcase"]}})
+
+
+def test_hero_video_plan_requires_matching_id_and_bounds() -> None:
+    base = {"label": "Recraft Vectorize in action"}
+    with pytest.raises(ValidationError, match="videoId"):
+        RedesignChanges.model_validate({"media": {"heroVideo": {"source": "youtube", **base}}})
+    with pytest.raises(ValidationError, match="creativeId"):
+        RedesignChanges.model_validate({"media": {"heroVideo": {"source": "creative", **base}}})
+    with pytest.raises(ValidationError):
+        RedesignChanges.model_validate(
+            {"media": {"heroVideo": {"source": "youtube", "videoId": "too-short", **base}}}
+        )
+    with pytest.raises(ValidationError):
+        RedesignChanges.model_validate(
+            {
+                "media": {
+                    "heroVideo": {
+                        "source": "youtube",
+                        "videoId": "z0r74lakHOM",
+                        "duration": 45,
+                        **base,
+                    }
+                }
+            }
+        )
+    with pytest.raises(ValidationError, match="repeat"):
+        RedesignChanges.model_validate(
+            {
+                "media": {
+                    "showcase": [
+                        {"group": "Vectors", "slot": 0, "prompt": "x" * 30},
+                        {"group": "Vectors", "slot": 0, "prompt": "y" * 30},
+                    ]
+                }
+            }
+        )
+
+
+def test_legacy_showcase_rows_still_parse() -> None:
+    from funnel_growth_agent.models import ShowcaseImagePlan
+    from redesign_helpers import LEGACY_TILE
+
+    plan = ShowcaseImagePlan.model_validate(LEGACY_TILE)
+    assert plan.tile_model == "nano_banana_2"
+    assert plan.prompt == LEGACY_TILE["prompt"] and plan.brief is None
+    assert not hasattr(plan, "aspect_ratio")
+    assert "aspectRatio" not in plan.model_dump(by_alias=True)
+    with pytest.raises(ValidationError, match="unknown route"):
+        ShowcaseImagePlan.model_validate({**LEGACY_TILE, "route": "dalle"})
+
+
+def test_showcase_brief_rules() -> None:
+    from funnel_growth_agent.models import ShowcaseImagePlan
+    from redesign_helpers import BRIEF_TILE
+
+    plan = ShowcaseImagePlan.model_validate(BRIEF_TILE)
+    assert plan.tile_model == "nano_banana_pro" and plan.lettering_text is None
+    with pytest.raises(ValidationError, match="exactly one of brief or prompt"):
+        ShowcaseImagePlan.model_validate({**BRIEF_TILE, "prompt": "x" * 30})
+    with pytest.raises(ValidationError, match="exactly one of brief or prompt"):
+        ShowcaseImagePlan.model_validate({"group": "Vectors", "slot": 0})
+    with pytest.raises(ValidationError, match="needs a medium"):
+        ShowcaseImagePlan.model_validate({**BRIEF_TILE, "medium": None})
+    with pytest.raises(ValidationError, match="palette of 2 or 3"):
+        ShowcaseImagePlan.model_validate({**BRIEF_TILE, "palette": ["#111111"]})
+    with pytest.raises(ValidationError, match="not a hex colour"):
+        ShowcaseImagePlan.model_validate({**BRIEF_TILE, "palette": ["#12", "red"]})
+    with pytest.raises(ValidationError, match="must be creative"):
+        ShowcaseImagePlan.model_validate({**BRIEF_TILE, "references": ["photo:1"]})
+    with pytest.raises(ValidationError, match="references repeat"):
+        ShowcaseImagePlan.model_validate(
+            {**BRIEF_TILE, "references": ["tile:Vectors:1", "tile:Vectors:1"]}
+        )
+    with pytest.raises(ValidationError, match="takes no references"):
+        ShowcaseImagePlan.model_validate({**BRIEF_TILE, "model": "nano_banana_2"})
+    with pytest.raises(ValidationError, match="double quotes"):
+        ShowcaseImagePlan.model_validate(
+            {**BRIEF_TILE, "medium": "lettering", "brief": "The word VECTOR in retro lettering"}
+        )
+    lettering = ShowcaseImagePlan.model_validate(
+        {**BRIEF_TILE, "medium": "lettering", "brief": 'The word "VECTOR" in retro lettering'}
+    )
+    assert lettering.lettering_text == "VECTOR"
+
+
+def test_previous_reference_needs_an_earlier_slot() -> None:
+    from funnel_growth_agent.models import MediaPlan
+    from redesign_helpers import BRIEF_TILE
+
+    with pytest.raises(ValidationError, match="'previous' needs an earlier slot"):
+        MediaPlan.model_validate({"showcase": [{**BRIEF_TILE, "references": ["previous"]}]})
+    plan = MediaPlan.model_validate(
+        {
+            "showcase": [
+                BRIEF_TILE,
+                {**BRIEF_TILE, "slot": 2, "references": ["previous"]},
+            ]
+        }
+    )
+    assert plan.showcase[1].references == ["previous"]
+
+
+def test_creative_analysis_v1_payload_still_parses_and_v2_fields_coerce() -> None:
+    from funnel_growth_agent.models import CreativeAnalysis
+
+    v1 = CreativeAnalysis.model_validate(
+        {
+            "visualHook": "x",
+            "primaryPromise": "y",
+            "audienceIntent": "z",
+            "ctaIntent": "c",
+            "suggestedLandingTheme": "t",
+        }
+    )
+    assert v1.palette == [] and v1.visual_elements == [] and v1.medium is None
+    v2 = CreativeAnalysis.model_validate(
+        {
+            "visualHook": "x",
+            "primaryPromise": "y",
+            "audienceIntent": "z",
+            "ctaIntent": "c",
+            "suggestedLandingTheme": "t",
+            "palette": "#C8F520\n#111111",
+            "visualElements": ["before/after split of one object"],
+            "composition": "headline top, object centre",
+            "medium": "flat vector",
+        }
+    )
+    assert v2.palette == ["#C8F520", "#111111"]
+
+
+def test_saved_proposal_old_hero_copy_rows_still_parse() -> None:
+    from funnel_growth_agent.models import SavedProposal
+
+    saved = SavedProposal.model_validate(
+        {
+            "runId": "2026-09-18T1918-v7-001",
+            "baseVersion": "v7",
+            "baseLandingHash": "abc",
+            "baseline": {
+                "funnelId": "recraft-quiz",
+                "version": "v6",
+                "isProxy": True,
+                "landingPeople": 1000,
+                "ctaPeople": 100,
+                "ctaRate": 0.1,
+            },
+            "decision": "experiment",
+            "experimentType": "hero_copy",
+            "changes": {"ctaLabel": "Vectorize My Image", "videoCta": None, "finalCta": None},
+        }
+    )
+    assert isinstance(saved.changes, HeroCopyChanges)
+    assert saved.changes.cta_label == "Vectorize My Image"
 
 
 def test_mixed_or_missing_experiment_type_is_rejected() -> None:

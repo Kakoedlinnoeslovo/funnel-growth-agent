@@ -13,7 +13,8 @@ from typing import Any
 from .config import Settings
 from .models import CachedCreativeAnalysis, CreativeAnalysis, RankedCreative
 
-ANALYSIS_SCHEMA_VERSION = 1
+# Bump when the describe prompt or CreativeAnalysis gains fields; cached reads re-run.
+ANALYSIS_SCHEMA_VERSION = 2
 
 ModelCall = Callable[[RankedCreative, Path | None], CreativeAnalysis]
 
@@ -45,7 +46,9 @@ def _fallback(creative: RankedCreative) -> CreativeAnalysis:
     )
 
 
-def _gemini_call(creative: RankedCreative, asset: Path | None, settings: Settings) -> CreativeAnalysis:
+def _gemini_call(
+    creative: RankedCreative, asset: Path | None, settings: Settings
+) -> CreativeAnalysis:
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is not set")
     from google import genai
@@ -64,7 +67,12 @@ def _gemini_call(creative: RankedCreative, asset: Path | None, settings: Setting
                 f"body: {creative.body}\n"
                 f"link_url: {creative.link_url}\n"
                 "Return JSON with keys visualHook, primaryPromise, audienceIntent, "
-                "ctaIntent, visibleText, productClaims, suggestedLandingTheme."
+                "ctaIntent, visibleText, productClaims, suggestedLandingTheme, "
+                "palette (2-4 hex colours, dominant first), visualElements (reusable motifs "
+                "a designer could lift into a landing tile, e.g. 'before/after split of one "
+                "object', 'acid lime headline on black', 'thick-outline cartoon over photo'), "
+                "composition (one sentence), medium (photo, flat vector, 3d, lettering, "
+                "collage, screenshot...)."
             )
         )
     ]
@@ -159,5 +167,6 @@ def analyze_ranked(
     call_model: ModelCall | None | bool = True,
 ) -> list[CachedCreativeAnalysis]:
     return [
-        analyze_creative(item, settings, call_model=call_model, refresh=refresh) for item in creatives
+        analyze_creative(item, settings, call_model=call_model, refresh=refresh)
+        for item in creatives
     ]

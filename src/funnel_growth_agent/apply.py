@@ -1,7 +1,8 @@
-"""Transactional apply: temp copy, allowlist, two validates, atomic publish."""
+"""Transactional apply: temp copy, media production, allowlist, two validates, atomic publish."""
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 from collections.abc import Callable
@@ -12,27 +13,44 @@ from typing import Any
 from ruamel.yaml import YAML
 
 from .config import Settings
+from .events import EmitData, emit_to
 from .landing import landing_hash
+from .landing_diff import (
+    FUNNEL_ALLOWED,
+    ApplyError,
+    ProducedFiles,
+    hard_diff_variant,
+    walk_files,
+)
+from .landing_patch import ProducedMedia, dump_yaml, load_yaml, patch_hero_copy, patch_redesign
+from .media import MediaTools, base_showcase_groups, default_media_tools, produce_media
 from .memory import existing_variants, get_run, update_run
-from .models import HeroCopyChanges, SavedProposal, SectionCopy
+from .models import MediaPlan, RedesignChanges, SavedProposal
+from .sources import creative_image_path, creative_video_path, youtube_ids
+from .tile_prompt import reference_kind
+
+__all__ = [
+    "ApplyError",
+    "DESCRIPTION_MAX",
+    "FUNNEL_ALLOWED",
+    "PREVIEW_BASE",
+    "apply_run",
+    "check_media_plan",
+    "describe_variant",
+    "hard_diff_site",
+    "hard_diff_variant",
+    "next_variant_name",
+    "patch_identities",
+    "patch_site",
+]
 
 Validate = Callable[[Path], None]
-
-_yaml = YAML()
-_yaml.preserve_quotes = True
-_yaml.width = 4096
-# Match the pricing-lab's hand-written style so a variant diffs only where copy changed.
-_yaml.indent(mapping=2, sequence=4, offset=2)
+Emit = Callable[[str, str], None]
 
 DESCRIPTION_MAX = 180
-
-HERO_TEXT = {"headline", "subhead", "ctaLabel", "reassurance"}
-SECTION_COMPONENTS = {"kittl-hero", "video-cta", "final-cta"}
-FUNNEL_ALLOWED = {"id", "landingUser", "title"}
-
-
-class ApplyError(ValueError):
-    pass
+PREVIEW_BASE = "http://localhost:5173/pm"
+LABELS = {"hero_copy": "hero-copy", "landing_redesign": "landing-redesign"}
+TITLES = {"hero_copy": "Hero copy experiment", "landing_redesign": "Landing redesign experiment"}
 
 
 def next_variant_name(settings: Settings) -> str:
@@ -49,113 +67,13 @@ def hyphenated(version: str) -> str:
     return version.replace("_", "-")
 
 
-def _load(path: Path) -> Any:
-    return _yaml.load(path.read_text(encoding="utf-8"))
-
-
-def _dump(path: Path, data: Any) -> None:
-    with path.open("w", encoding="utf-8") as handle:
-        _yaml.dump(data, handle)
-
-
-def patch_identities(funnel_path: Path, variant: str) -> None:
-    doc = _load(funnel_path)
+def patch_identities(funnel_path: Path, variant: str, experiment_type: str = "hero_copy") -> None:
+    doc = load_yaml(funnel_path)
     slug = hyphenated(variant)
     doc["id"] = f"recraft-quiz-{slug}"
     doc["landingUser"] = f"pricing-lab-{slug}"
-    doc["title"] = f"Hero copy experiment {variant}"
-    _dump(funnel_path, doc)
-
-
-def _apply_copy(section: dict[str, Any], copy: SectionCopy | HeroCopyChanges) -> None:
-    if copy.headline is not None:
-        section["headline"] = copy.headline
-    if copy.subhead is not None:
-        section["subhead"] = copy.subhead
-    if copy.cta_label is not None:
-        section["ctaLabel"] = copy.cta_label
-    if copy.reassurance is not None:
-        section["reassurance"] = copy.reassurance
-
-
-def patch_landing(landing_path: Path, changes: HeroCopyChanges) -> None:
-    doc = _load(landing_path)
-    sections = ((doc.get("props") or {}).get("sections")) or []
-    for section in sections:
-        component = section.get("component")
-        if component == "kittl-hero":
-            _apply_copy(section, changes)
-        elif component == "video-cta" and changes.video_cta:
-            _apply_copy(section, changes.video_cta)
-        elif component == "final-cta" and changes.final_cta:
-            _apply_copy(section, changes.final_cta)
-    _dump(landing_path, doc)
-
-
-def _walk_files(root: Path) -> dict[str, Path]:
-    return {str(path.relative_to(root)): path for path in root.rglob("*") if path.is_file()}
-
-
-def _changed_keys(old: Any, new: Any, prefix: str = "") -> list[str]:
-    if old == new:
-        return []
-    if type(old) is not type(new):
-        return [prefix or "$"]
-    if isinstance(old, dict):
-        keys = set(old) | set(new)
-        out: list[str] = []
-        for key in sorted(keys, key=str):
-            path = f"{prefix}.{key}" if prefix else str(key)
-            if key not in old or key not in new:
-                out.append(path)
-            else:
-                out.extend(_changed_keys(old[key], new[key], path))
-        return out
-    if isinstance(old, list):
-        if len(old) != len(new):
-            return [prefix or "$"]
-        out: list[str] = []
-        for index, (left, right) in enumerate(zip(old, new)):
-            out.extend(_changed_keys(left, right, f"{prefix}[{index}]"))
-        return out
-    return [prefix or "$"]
-
-
-def _landing_change_allowed(path: str, old_doc: dict[str, Any]) -> bool:
-    if not path.startswith("props.sections["):
-        return False
-    close = path.find("]")
-    index = int(path[len("props.sections[") : close])
-    remainder = path[close + 2 :] if path[close + 1 : close + 2] == "." else ""
-    sections = ((old_doc.get("props") or {}).get("sections")) or []
-    if index >= len(sections):
-        return False
-    component = sections[index].get("component")
-    return component in SECTION_COMPONENTS and remainder in HERO_TEXT
-
-
-def hard_diff_variant(base_dir: Path, variant_dir: Path) -> None:
-    base_files = _walk_files(base_dir)
-    variant_files = _walk_files(variant_dir)
-    if set(base_files) != set(variant_files):
-        raise ApplyError("hard-diff allowlist: variant file set differs from the base version")
-    for rel, base_path in base_files.items():
-        variant_path = variant_files[rel]
-        if base_path.read_bytes() == variant_path.read_bytes():
-            continue
-        if rel == "funnel.yaml":
-            changed = _changed_keys(_load(base_path), _load(variant_path))
-            if any(key not in FUNNEL_ALLOWED for key in changed):
-                raise ApplyError(f"hard-diff allowlist: funnel.yaml changed {changed}")
-            continue
-        if rel == "steps/landing.yaml":
-            old_doc = _load(base_path)
-            new_doc = _load(variant_path)
-            changed = _changed_keys(old_doc, new_doc)
-            if any(not _landing_change_allowed(key, old_doc) for key in changed):
-                raise ApplyError(f"hard-diff allowlist: landing.yaml changed {changed}")
-            continue
-        raise ApplyError(f"hard-diff allowlist: unexpected change in {rel}")
+    doc["title"] = f"{TITLES.get(experiment_type, TITLES['hero_copy'])} {variant}"
+    dump_yaml(funnel_path, doc)
 
 
 def hard_diff_site(original: bytes, updated: Path, variant: str) -> None:
@@ -181,12 +99,14 @@ def hard_diff_site(original: bytes, updated: Path, variant: str) -> None:
     other_old = {key: old[key] for key in old if key not in {"published_versions", "versions"}}
     other_new = {key: new[key] for key in new if key not in {"published_versions", "versions"}}
     if other_old != other_new:
-        raise ApplyError("hard-diff allowlist: site.yaml changed outside published_versions/versions")
+        raise ApplyError(
+            "hard-diff allowlist: site.yaml changed outside published_versions/versions"
+        )
 
 
-def describe_variant(variant: str, problem: str | None) -> str:
+def describe_variant(variant: str, problem: str | None, experiment_type: str = "hero_copy") -> str:
     """One line for site.yaml `versions`: what the variant is, then the first sentence of why."""
-    label = f"Agent hero-copy experiment {variant}"
+    label = f"Agent {LABELS.get(experiment_type, LABELS['hero_copy'])} experiment {variant}"
     text = " ".join((problem or "").split())
     if not text:
         return label
@@ -207,8 +127,10 @@ def _append_keeping_trailing_comment(seq: Any, value: str) -> None:
         comments[len(seq) - 1] = trailing
 
 
-def patch_site(site_path: Path, variant: str, problem: str | None) -> None:
-    doc = _load(site_path)
+def patch_site(
+    site_path: Path, variant: str, problem: str | None, experiment_type: str = "hero_copy"
+) -> None:
+    doc = load_yaml(site_path)
     # Mutate the existing sequence: replacing it would drop the comments ruamel keeps on it.
     published = doc.get("published_versions")
     if published is None:
@@ -219,8 +141,8 @@ def patch_site(site_path: Path, variant: str, problem: str | None) -> None:
     if versions is None:
         doc["versions"] = {}
         versions = doc["versions"]
-    versions[variant] = describe_variant(variant, problem)
-    _dump(site_path, doc)
+    versions[variant] = describe_variant(variant, problem, experiment_type)
+    dump_yaml(site_path, doc)
 
 
 def default_validate(funnels_dir: Path, settings: Settings) -> None:
@@ -241,59 +163,239 @@ def default_validate(funnels_dir: Path, settings: Settings) -> None:
         )
 
 
+def _tree_digest(root: Path) -> str:
+    """Content hash of a directory tree, so apply can prove it left the base and _shared alone."""
+    digest = hashlib.sha256()
+    if not root.is_dir():
+        return "absent"
+    for rel, path in sorted(walk_files(root).items()):
+        digest.update(rel.encode("utf-8"))
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def check_media_plan(plan: MediaPlan, proposal: SavedProposal, settings: Settings) -> None:
+    """Refuse sources the model was not offered, before anything is downloaded or generated."""
+    known = {item.creative_id for item in proposal.creative_evidence}
+    clip = plan.hero_video
+    if clip is not None:
+        if clip.source == "youtube":
+            if clip.source_id not in youtube_ids(settings):
+                raise ApplyError(
+                    f"media: youtube {clip.source_id} is not in the catalog offered by "
+                    "get_media_sources"
+                )
+        else:
+            if clip.source_id not in known:
+                raise ApplyError(
+                    f"media: creative {clip.source_id} is not among this proposal's ranked creatives"
+                )
+            if not creative_video_path(settings, clip.source_id).is_file():
+                raise ApplyError(
+                    f"media: creative {clip.source_id} has no local mp4 in growth-loop"
+                )
+    if not plan.showcase:
+        return
+    groups = base_showcase_groups(settings, proposal.base_version)
+    for item in plan.showcase:
+        if item.group not in groups:
+            raise ApplyError(f"media: showcase group {item.group!r} is not on the base landing")
+        if item.slot >= len(groups[item.group][1]):
+            raise ApplyError(f"media: showcase group {item.group!r} has no slot {item.slot}")
+        for ref in item.references:
+            kind = reference_kind(ref)
+            if kind == "creative":
+                creative_id = ref.split(":", 1)[1]
+                if creative_id not in known:
+                    raise ApplyError(
+                        f"media: reference {ref!r} is not among this proposal's ranked creatives"
+                    )
+                if not creative_image_path(settings, creative_id).is_file():
+                    raise ApplyError(f"media: reference {ref!r} has no local jpg in growth-loop")
+            elif kind == "tile":
+                _, label, index_text = ref.split(":", 2)
+                if label not in groups or int(index_text) >= len(groups[label][1]):
+                    raise ApplyError(f"media: reference {ref!r} does not exist on the base landing")
+
+
 def apply_run(
     settings: Settings,
     run_id: str,
     *,
     validate: Validate | None = None,
+    media_tools: MediaTools | None = None,
+    on_event: Emit | None = None,
+    tile_variants: int | None = None,
+    on_data: EmitData | None = None,
+) -> str:
+    """Apply a proposed run as a new variant. `on_event` gets (stage, message) lines as before;
+    `on_data` gets structured events (events.py) including every tile candidate and verdict."""
+    try:
+        return _apply_run(
+            settings,
+            run_id,
+            validate=validate,
+            media_tools=media_tools,
+            on_event=on_event,
+            tile_variants=tile_variants,
+            on_data=on_data,
+        )
+    except Exception as error:
+        emit_to(on_data, "apply_failed", {"runId": run_id, "error": str(error)})
+        raise
+
+
+def _apply_run(
+    settings: Settings,
+    run_id: str,
+    *,
+    validate: Validate | None,
+    media_tools: MediaTools | None,
+    on_event: Emit | None,
+    tile_variants: int | None,
+    on_data: EmitData | None,
 ) -> str:
     row = get_run(settings, run_id)
+    if row.status != "proposed":
+        raise ApplyError(
+            f"{run_id} is {row.status}"
+            + (f" as {row.variant}" if row.variant else "")
+            + "; a run is applied once. Propose again for another variant."
+        )
     proposal = SavedProposal.model_validate(row.proposal)
     if proposal.decision != "experiment" or proposal.changes is None:
         raise ApplyError("no_experiment cannot be applied")
     current = landing_hash(settings.landing_path)
     if current != proposal.base_landing_hash:
-        raise ApplyError(
-            f"stale base hash: {settings.base_version} landing drifted since propose"
-        )
+        raise ApplyError(f"stale base hash: {settings.base_version} landing drifted since propose")
+    redesign = isinstance(proposal.changes, RedesignChanges)
+    kind = "landing_redesign" if redesign else "hero_copy"
+    media_plan = proposal.changes.media if redesign else None
+    if media_plan is not None and media_plan.is_empty():
+        media_plan = None
+    if media_plan is not None:
+        check_media_plan(media_plan, proposal, settings)
+
     variant = next_variant_name(settings)
     dest = settings.pricing_lab_dir / "funnels" / variant
     if dest.exists():
         raise ApplyError(f"{variant} already exists; refuse overwrite")
     funnels = settings.pricing_lab_dir / "funnels"
+    base_dir = funnels / settings.base_version
+    shared_dir = funnels / "_shared"
     base_bytes = settings.landing_path.read_bytes()
+    base_digest = _tree_digest(base_dir)
+    shared_digest = _tree_digest(shared_dir)
     site_original = settings.site_path.read_bytes()
+    old_default = str((YAML(typ="safe").load(site_original) or {}).get("default_version") or "")
     validator = validate or (lambda directory: default_validate(directory, settings))
 
-    with TemporaryDirectory() as tmp:
+    events: list[tuple[str, str]] = []
+
+    def emit(stage: str, message: str) -> None:
+        events.append((stage, message))
+        if on_event is not None:
+            on_event(stage, message)
+        emit_to(on_data, "apply_stage", {"stage": stage, "message": message})
+
+    emit_to(
+        on_data,
+        "apply_started",
+        {"runId": run_id, "baseVersion": settings.base_version, "variant": variant, "kind": kind},
+    )
+
+    produced: ProducedMedia | None = None
+    order: list[str] | None = None
+    summary: list[str] = []
+    settings.tmp_dir.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=settings.tmp_dir) as tmp:
         tmp_funnels = Path(tmp) / "funnels"
         shutil.copytree(funnels, tmp_funnels)
+        tmp_base = tmp_funnels / settings.base_version
         tmp_variant = tmp_funnels / variant
-        shutil.copytree(tmp_funnels / settings.base_version, tmp_variant)
-        patch_identities(tmp_variant / "funnel.yaml", variant)
-        patch_landing(tmp_variant / "steps" / "landing.yaml", proposal.changes)
-        hard_diff_variant(tmp_funnels / settings.base_version, tmp_variant)
+        shutil.copytree(tmp_base, tmp_variant)
+        patch_identities(tmp_variant / "funnel.yaml", variant, kind)
+        emit("copy", f"{settings.base_version} copied to {variant}")
+        if media_plan is not None:
+            tools = media_tools or default_media_tools(settings)
+            produced = produce_media(
+                media_plan,
+                tmp_variant,
+                settings,
+                tools,
+                emit,
+                variants=tile_variants or settings.tile_variants,
+                on_data=on_data,
+            )
+            emit("media", f"{len(produced.files.all)} media files staged")
+        landing = tmp_variant / "steps" / "landing.yaml"
+        if redesign:
+            order = patch_redesign(landing, proposal.changes, produced)
+            emit("patch", "sections: " + ", ".join(order))
+        else:
+            patch_hero_copy(landing, proposal.changes)
+            emit("patch", "hero copy written")
+        files = produced.files if produced is not None else ProducedFiles()
+        summary = hard_diff_variant(tmp_base, tmp_variant, files)
+        emit("diff", "allowlist ok: " + ("; ".join(summary) or "identity only"))
+        emit("validate", "funnel:validate 1/2")
         validator(tmp_funnels)
-        hard_diff_variant(tmp_funnels / settings.base_version, tmp_variant)
-        patch_site(tmp_funnels / "site.yaml", variant, proposal.problem)
+        hard_diff_variant(tmp_base, tmp_variant, files)
+        patch_site(tmp_funnels / "site.yaml", variant, proposal.problem, kind)
         hard_diff_site(site_original, tmp_funnels / "site.yaml", variant)
+        emit("validate", "funnel:validate 2/2")
         validator(tmp_funnels)
         hard_diff_site(site_original, tmp_funnels / "site.yaml", variant)
         shutil.move(str(tmp_variant), str(dest))
         settings.site_path.write_bytes((tmp_funnels / "site.yaml").read_bytes())
+        emit("publish", f"{variant} moved into place")
 
     if settings.landing_path.read_bytes() != base_bytes:
         raise RuntimeError(f"{settings.base_version} landing bytes changed during apply")
+    if _tree_digest(base_dir) != base_digest:
+        raise RuntimeError(f"{settings.base_version} files changed during apply")
+    if _tree_digest(shared_dir) != shared_digest:
+        raise RuntimeError("funnels/_shared changed during apply")
     update_run(settings, run_id, status="applied", variant=variant)
-    return (
-        f"Created {variant}\n\n"
-        "✓ proposal valid\n"
-        "✓ base hash matches\n"
-        f"✓ {settings.base_version} unchanged\n"
-        "✓ only allowed landing fields changed\n"
-        f"✓ default_version remains {settings.base_version}\n"
-        f"✓ {variant} added to published_versions\n"
-        "✓ funnel validation passed\n\n"
-        "Preview:\n\n"
-        f"http://localhost:5173/pm/{variant}"
+    emit_to(
+        on_data,
+        "apply_done",
+        {"runId": run_id, "variant": variant, "previewUrl": f"{PREVIEW_BASE}/{variant}"},
     )
+
+    lines = [
+        f"Created {variant}",
+        "",
+        f"✓ proposal valid ({kind})",
+        "✓ base hash matches",
+        f"✓ {settings.base_version} unchanged",
+        "✓ only allowed landing fields changed",
+        f"✓ default_version remains {old_default or settings.base_version}",
+        f"✓ {variant} added to published_versions",
+        "✓ funnel validation passed",
+    ]
+    if produced is not None:
+        lines.append(
+            f"✓ {len(produced.files.all)} media files produced ({produced.cached_files} cached)"
+        )
+    for tile in produced.tiles if produced is not None else []:
+        judge = tile.judge
+        picked = judge.scores[judge.chosen] if judge and judge.scores else None
+        score = f" ({picked.total:.1f})" if picked else ""
+        chosen = f"#{judge.chosen}" if judge else "#0"
+        lines.append(
+            f"✓ tile {tile.spec.stem}: {tile.spec.plan.group} slot {tile.spec.plan.slot} {chosen}{score}"
+        )
+    if order is not None:
+        lines.append("✓ sections: " + ", ".join(order))
+    lines += [
+        "",
+        "Preview:",
+        "",
+        f"{PREVIEW_BASE}/{variant}",
+        "(restart `npm run dev` if the variant 404s: Vite globs version folders at startup)",
+        "",
+        "Log:",
+    ]
+    lines += [f"• {stage}: {message}" for stage, message in events]
+    return "\n".join(lines)

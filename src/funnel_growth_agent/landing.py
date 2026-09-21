@@ -28,13 +28,35 @@ def landing_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _strip_section(section: dict[str, Any]) -> dict[str, Any]:
-    out: dict[str, Any] = {"component": section.get("component")}
+def resolve_section_ids(sections: list[dict[str, Any]]) -> list[str]:
+    """Port of the lab's resolveSectionIds: explicit ids win, then component, component-2, ..."""
+    taken = {str(section["id"]) for section in sections if section.get("id")}
+    out: list[str] = []
+    for section in sections:
+        if section.get("id"):
+            out.append(str(section["id"]))
+            continue
+        component = str(section.get("component"))
+        candidate = component
+        n = 1
+        while candidate in taken:
+            n += 1
+            candidate = f"{component}-{n}"
+        taken.add(candidate)
+        out.append(candidate)
+    return out
+
+
+def _strip_section(section: dict[str, Any], section_id: str) -> dict[str, Any]:
+    out: dict[str, Any] = {"id": section_id, "component": section.get("component")}
     for key in ("headline", "subhead", "ctaLabel", "reassurance", "layout", "stickyCta"):
         if key in section:
             out[key] = section[key]
     if "video" in section:
         out["hasVideo"] = True
+        label = (section.get("video") or {}).get("label")
+        if label:
+            out["videoLabel"] = label
     if "logos" in section:
         out["logoCount"] = len(section["logos"] or [])
     if "quotes" in section:
@@ -42,19 +64,27 @@ def _strip_section(section: dict[str, Any]) -> dict[str, Any]:
     if "plans" in section:
         out["planNames"] = [plan.get("name") for plan in section["plans"] or []]
     if "groups" in section:
-        out["groupLabels"] = [group.get("label") for group in section["groups"] or []]
+        groups = section["groups"] or []
+        out["groupLabels"] = [group.get("label") for group in groups]
+        out["groups"] = [
+            {"label": group.get("label"), "imageCount": len(group.get("images") or [])}
+            for group in groups
+        ]
     return out
 
 
 def get_current_landing(settings: Settings) -> dict[str, Any]:
     raw = _yaml.load(settings.landing_path.read_text(encoding="utf-8")) or {}
     props = raw.get("props") or {}
-    sections = [_strip_section(section) for section in props.get("sections") or []]
+    raw_sections = list(props.get("sections") or [])
+    ids = resolve_section_ids(raw_sections)
+    sections = [_strip_section(section, sid) for section, sid in zip(raw_sections, ids)]
     return {
         "version": settings.base_version,
         "hash": landing_hash(settings.landing_path),
         "pageTitle": props.get("pageTitle"),
         "header": props.get("header"),
         "footer": props.get("footer"),
+        "mobile": props.get("mobile"),
         "sections": sections,
     }
