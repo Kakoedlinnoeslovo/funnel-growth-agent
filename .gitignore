@@ -10,6 +10,7 @@ data/creative_analysis/*.json
 data/media_cache/
 data/research/
 data/tmp/
+data/demo/
 # Clean data dir for demo recordings (holds downloaded clips and screenshots).
 data-demo/
 .superpowers/
