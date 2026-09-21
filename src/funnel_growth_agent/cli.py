@@ -14,7 +14,7 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 demo_app = typer.Typer(
     add_completion=False,
     invoke_without_command=True,
-    help="Demo console: replay a recorded run next to the live landing, or run it live.",
+    help="Demo console: run the agent live in the browser next to the landing.",
 )
 app.add_typer(demo_app, name="demo")
 
@@ -215,7 +215,7 @@ def show(
         typer.launch(str(path))
 
 
-@app.command()
+@app.command(hidden=True)
 def tiles(
     run_id: str = typer.Argument(...),
     variants: int | None = typer.Option(None, "--variants", min=1, max=4),
@@ -282,7 +282,7 @@ def evaluate(run_id: str = typer.Argument(...)) -> None:
         raise typer.Exit(code=1) from error
 
 
-@app.command("quality-gate")
+@app.command("quality-gate", hidden=True)
 def quality_gate_cmd(
     snapshots: str | None = typer.Option(None, "--snapshots"),
 ) -> None:
@@ -349,7 +349,7 @@ def demo(
     )
 
 
-@demo_app.command("synthesize")
+@demo_app.command("synthesize", hidden=True)
 def demo_synthesize(run_id: str = typer.Argument(...)) -> None:
     """Build a replayable recording for a run that already exists, from memory and caches
     only. No model is called; nothing in the lab changes."""
@@ -366,7 +366,7 @@ def demo_synthesize(run_id: str = typer.Argument(...)) -> None:
     typer.echo(f"Recording: {path}")
 
 
-@demo_app.command("record")
+@demo_app.command("record", hidden=True)
 def demo_record(
     refresh_creatives: bool = typer.Option(False, "--refresh-creatives"),
     no_apply: bool = typer.Option(False, "--no-apply", help="Stop after propose."),
