@@ -34,8 +34,28 @@ class Settings:
     anthropic_model: str = "claude-sonnet-4-6"
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.6-flash"
-    analysis_schema_version: int = 1
+    glam_api_key: str | None = None
+    browse_bin: Path | None = None
+    tile_variants: int = 3
+    analysis_schema_version: int = 2
     now: str | None = None
+
+    @property
+    def media_cache_dir(self) -> Path:
+        return self.data_dir / "media_cache"
+
+    @property
+    def research_dir(self) -> Path:
+        return self.data_dir / "research"
+
+    @property
+    def tmp_dir(self) -> Path:
+        # Same volume as the lab so the final move of a variant is a rename, not a copy.
+        return self.data_dir / "tmp"
+
+    @property
+    def youtube_catalog_path(self) -> Path:
+        return PACKAGE_DIR / "youtube_catalog.json"
 
     @property
     def reports_dir(self) -> Path:
@@ -111,4 +131,9 @@ def load_settings() -> Settings:
         anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-3.6-flash"),
+        glam_api_key=os.getenv("GLAM_API_KEY") or None,
+        tile_variants=max(1, min(4, int(os.getenv("TILE_VARIANTS", "3")))),
+        browse_bin=Path(os.environ["GSTACK_BROWSE"]).expanduser()
+        if os.getenv("GSTACK_BROWSE")
+        else None,
     )

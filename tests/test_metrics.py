@@ -63,7 +63,12 @@ def _quiz_flow(funnel_id: str, version: str, landing: int, cta: int) -> dict:
         "landing_people": landing,
         "payments": 0,
         "rows": [
-            {"node_id": "landing", "kind": "screen", "viewed": landing, "continue_rate": cta / landing},
+            {
+                "node_id": "landing",
+                "kind": "screen",
+                "viewed": landing,
+                "continue_rate": cta / landing,
+            },
             {"node_id": "making", "kind": "screen", "viewed": cta, "continue_rate": 0.5},
         ],
     }

@@ -19,6 +19,30 @@ def test_current_landing_is_structured_and_omits_media_bytes(settings) -> None:
     assert "webm" not in blob
 
 
+def test_current_landing_exposes_section_ids_and_group_labels(settings) -> None:
+    landing = get_current_landing(settings)
+    ids = [section["id"] for section in landing["sections"]]
+    assert ids == [
+        "kittl-hero",
+        "logo-strip",
+        "showcase",
+        "inline-cta",
+        "style-switcher",
+        "inline-cta-2",
+        "press-quotes",
+        "video-cta",
+        "plan-preview",
+        "final-cta",
+    ]
+    showcase = landing["sections"][2]
+    assert showcase["groups"] == [
+        {"label": "Vectors", "imageCount": 3},
+        {"label": "Photos", "imageCount": 3},
+    ]
+    assert landing["mobile"] == "phone-first"
+    assert "assets/" not in str(landing)
+
+
 def test_previous_runs_always_include_evaluation_and_learning(settings) -> None:
     append_run(
         settings,

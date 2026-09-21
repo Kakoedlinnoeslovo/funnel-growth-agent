@@ -91,7 +91,9 @@ def baseline_from_report(
         return (base_ok, quiz, people)
 
     flow = max(flows, key=score)
-    landing_row = next((row for row in flow.get("rows") or [] if row.get("node_id") == "landing"), None)
+    landing_row = next(
+        (row for row in flow.get("rows") or [] if row.get("node_id") == "landing"), None
+    )
     landing_people = int(flow.get("landing_people") or (landing_row or {}).get("viewed") or 0)
     cta_row = next(
         (
@@ -151,7 +153,10 @@ def get_landing_cta_metrics(settings: Settings) -> MetricsSlice:
         raise StaleReportError(
             "Cannot generate proposal.\n\nLatest analytics report has no funnel flows."
         )
-    fresh = age <= settings.max_report_age_hours and baseline.landing_people >= settings.min_landing_people
+    fresh = (
+        age <= settings.max_report_age_hours
+        and baseline.landing_people >= settings.min_landing_people
+    )
     if age > settings.max_report_age_hours:
         raise StaleReportError(
             "Cannot generate proposal.\n\n"

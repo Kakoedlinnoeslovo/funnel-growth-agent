@@ -85,8 +85,40 @@ def test_missing_asset_and_key_still_returns_title_body_fallback(settings) -> No
     creative = _ranked(imagePath="/no/such/file.jpg")
     cached = analyze_creative(creative, settings, call_model=None)
     assert cached.analysis.primary_promise
-    assert "Convert JPG" in cached.analysis.visible_text[0] or "jpg" in cached.analysis.primary_promise.lower()
+    assert (
+        "Convert JPG" in cached.analysis.visible_text[0]
+        or "jpg" in cached.analysis.primary_promise.lower()
+    )
     assert cached.model == "title-body-fallback"
+
+
+def test_schema_version_is_two_everywhere_and_v1_caches_rerun(settings, tmp_path: Path) -> None:
+    from funnel_growth_agent.config import Settings
+
+    assert ANALYSIS_SCHEMA_VERSION == 2
+    assert Settings.__dataclass_fields__["analysis_schema_version"].default == 2
+    assert settings.analysis_schema_version == 2
+    calls = {"n": 0}
+
+    def fake_call(_creative: RankedCreative, _asset: Path | None) -> CreativeAnalysis:
+        calls["n"] += 1
+        return CreativeAnalysis(
+            visual_hook="v2",
+            primary_promise="p",
+            audience_intent="a",
+            cta_intent="c",
+            suggested_landing_theme="t",
+            palette=["#C8F520"],
+        )
+
+    image = tmp_path / "ad.jpg"
+    image.write_bytes(b"one")
+    creative = _ranked(imagePath=str(image))
+    settings.analysis_schema_version = 1
+    analyze_creative(creative, settings, call_model=fake_call)
+    settings.analysis_schema_version = 2
+    cached = analyze_creative(creative, settings, call_model=fake_call)
+    assert calls["n"] == 2 and cached.schema_version == 2 and cached.analysis.palette == ["#C8F520"]
 
 
 def test_fingerprint_uses_sha_when_file_exists(tmp_path: Path) -> None:

@@ -75,6 +75,37 @@ def test_invalid_model_output_writes_no_memory(settings) -> None:
     assert not settings.memory_path.is_file()
 
 
+def test_propose_redesign_uses_research_and_sources_but_writes_memory_only(settings) -> None:
+    from redesign_helpers import FakeBrowser, FakeReader, redesign_proposal
+    from redesign_helpers import ScriptedModel as ArgScriptedModel
+
+    model = ArgScriptedModel(
+        redesign_proposal(),
+        tools=[
+            ("get_current_landing", {}),
+            ("get_media_sources", {}),
+            ("research_landing", {"url": "https://www.kittl.com/"}),
+        ],
+    )
+    result = propose(settings, model=model, browser=FakeBrowser(), reader=FakeReader())
+    assert result.experiment_type == "landing_redesign"
+    assert result.changes.media.hero_video.video_id == "z0r74lakHOM"
+    sources = model.results["get_media_sources"]
+    assert any(video["videoId"] == "z0r74lakHOM" for video in sources["youtube"])
+    assert sources["creatives"] == []
+    research = model.results["research_landing"]
+    assert research["read"]["primaryCta"] == "Start for free"
+    assert model.results["get_current_landing"]["sections"][5]["id"] == "inline-cta-2"
+    assert settings.memory_path.is_file()
+    assert not settings.media_cache_dir.exists()
+    assert not (settings.pricing_lab_dir / "funnels" / "v7_a1").exists()
+    text = format_propose(result, include_apply=True)
+    assert "heroVideo: youtube z0r74lakHOM 3s+12s" in text
+    assert "composition.omit: style-switcher, inline-cta-2" in text
+    assert "ctaLabel='Vectorize my image'" in text
+    assert "No files were modified" in text
+
+
 def test_weak_creatives_do_not_block_propose(settings) -> None:
     week = settings.reports_dir / "2026-09-18_week" / "report_data.json"
     data = json.loads(week.read_text())

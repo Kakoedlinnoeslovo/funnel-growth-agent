@@ -98,4 +98,6 @@ def existing_variants(settings: Settings) -> list[str]:
     if not root.is_dir():
         return []
     prefix = f"{settings.base_version}_a"
-    return sorted(path.name for path in root.iterdir() if path.is_dir() and path.name.startswith(prefix))
+    return sorted(
+        path.name for path in root.iterdir() if path.is_dir() and path.name.startswith(prefix)
+    )

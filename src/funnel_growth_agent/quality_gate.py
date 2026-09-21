@@ -13,7 +13,9 @@ from .models import LandingProposal, NoExperiment, SavedProposal
 UNSUPPORTED = ("guaranteed", "best in the world", "#1 ai", "unlimited free pro")
 
 
-def score_proposal(proposal: SavedProposal | LandingProposal | NoExperiment, context: dict[str, Any]) -> dict[str, Any]:
+def score_proposal(
+    proposal: SavedProposal | LandingProposal | NoExperiment, context: dict[str, Any]
+) -> dict[str, Any]:
     baseline_version = ""
     if isinstance(proposal, SavedProposal):
         baseline_version = (proposal.baseline.version or "").lower()
@@ -50,13 +52,20 @@ def score_proposal(proposal: SavedProposal | LandingProposal | NoExperiment, con
     )
     understands = True
     mismatch = True
-    falsifiable = None if decision == "no_experiment" else bool(hypothesis) and (
-        "will" in (hypothesis or "").lower() or "if " in (hypothesis or "").lower()
+    falsifiable = (
+        None
+        if decision == "no_experiment"
+        else bool(hypothesis)
+        and ("will" in (hypothesis or "").lower() or "if " in (hypothesis or "").lower())
     )
     minimal = None if decision == "no_experiment" else changes is not None
-    no_claim = not any(phrase in blob or phrase in (hypothesis or "").lower() for phrase in UNSUPPORTED)
+    no_claim = not any(
+        phrase in blob or phrase in (hypothesis or "").lower() for phrase in UNSUPPORTED
+    )
     previous = context.get("previous") or []
-    not_duplicate = hypothesis not in {item.get("hypothesis") for item in previous if isinstance(item, dict)}
+    not_duplicate = hypothesis not in {
+        item.get("hypothesis") for item in previous if isinstance(item, dict)
+    }
     would_test = None if decision == "no_experiment" else bool(hypothesis)
     return {
         "grounded": grounded,
@@ -67,11 +76,13 @@ def score_proposal(proposal: SavedProposal | LandingProposal | NoExperiment, con
         "no_unsupported_claim": no_claim,
         "not_duplicate": not_duplicate,
         "would_test": would_test,
-        "experiment_type_ok": experiment_type in {None, "hero_copy"},
+        "experiment_type_ok": experiment_type in {None, "hero_copy", "landing_redesign"},
     }
 
 
-def valid_proposal(proposal: SavedProposal | LandingProposal | NoExperiment, card: dict[str, Any]) -> bool:
+def valid_proposal(
+    proposal: SavedProposal | LandingProposal | NoExperiment, card: dict[str, Any]
+) -> bool:
     if isinstance(proposal, SavedProposal):
         decision = proposal.decision
         reason = proposal.reason
@@ -90,7 +101,11 @@ def valid_proposal(proposal: SavedProposal | LandingProposal | NoExperiment, car
         return False
     if decision == "no_experiment" and not reason:
         return False
-    if not card["experiment_type_ok"] or not card["no_unsupported_claim"] or not card["not_duplicate"]:
+    if (
+        not card["experiment_type_ok"]
+        or not card["no_unsupported_claim"]
+        or not card["not_duplicate"]
+    ):
         return False
     return True
 
@@ -125,7 +140,9 @@ def available_snapshots(settings: Settings) -> list[dict[str, str]]:
         rows.append(
             {
                 "path": str(path),
-                "kind": str(period.get("kind") or ("week" if path.parent.name.endswith("_week") else "day")),
+                "kind": str(
+                    period.get("kind") or ("week" if path.parent.name.endswith("_week") else "day")
+                ),
                 "title": str(data.get("title") or path.parent.name),
                 "generated_at": str(data.get("generated_at") or ""),
             }
