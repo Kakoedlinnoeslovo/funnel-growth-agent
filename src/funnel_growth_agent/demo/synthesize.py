@@ -24,11 +24,12 @@ from ..media import (
 )
 from ..memory import get_previous_runs, get_run
 from ..metrics import get_landing_cta_metrics, load_latest_reports
-from ..models import RankedCreative, RedesignChanges, SavedProposal
+from ..models import CachedShowcaseStyle, RankedCreative, RedesignChanges, SavedProposal
 from ..proposal_page import base_sections
 from ..research import CachedResearch
 from ..showcase_style import style_cache_path
 from ..sources import creative_image_path
+from ..visual_landscape import landscape_dict, load_cached_research, visual_landscape
 from .events import Recorder, recording_path, write_events
 
 PREVIEW_BASE = "http://localhost:5173/pm"
@@ -86,20 +87,8 @@ def _metrics(settings: Settings, proposal: SavedProposal) -> dict[str, Any]:
         return {"baseline": proposal.baseline.model_dump(by_alias=True), "fresh": False}
 
 
-def _research(settings: Settings) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    if not settings.research_dir.is_dir():
-        return out
-    for path in sorted(settings.research_dir.glob("*.json")):
-        if path.name.startswith("showcase-"):
-            continue
-        try:
-            cached = CachedResearch.model_validate_json(path.read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - skip files this version cannot read
-            continue
-        if cached.read is not None:
-            out.append(json.loads(cached.model_dump_json(by_alias=True)))
-    return out
+def _research(settings: Settings) -> list[CachedResearch]:
+    return load_cached_research(settings)
 
 
 def _showcase_style(settings: Settings) -> dict[str, Any] | None:
@@ -162,8 +151,21 @@ def synthesize_events(settings: Settings, run_id: str) -> list[Event]:
     style = _showcase_style(settings)
     if style is not None:
         tool("get_showcase_style", {}, style)
-    for research in _research(settings):
-        tool("research_landing", {"url": research.get("url")}, research)
+    research = _research(settings)
+    for record in research:
+        tool(
+            "research_landing",
+            {"url": record.url},
+            json.loads(record.model_dump_json(by_alias=True)),
+        )
+    style_record = CachedShowcaseStyle.model_validate(style) if style is not None else None
+    previous_runs = [
+        r
+        for r in get_previous_runs(settings, experiment_type="landing_redesign", limit=10)
+        if r.run_id < run_id
+    ]
+    landscape = visual_landscape(ranked, analyses, research, style_record, previous_runs)
+    tool("get_visual_landscape", {}, landscape_dict(landscape))
 
     output = {
         key: value

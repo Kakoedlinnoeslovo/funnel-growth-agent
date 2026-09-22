@@ -24,8 +24,12 @@ EventKind = Literal[
     "tile_judged",
     "apply_done",
     "apply_failed",
+    "deploy_started",
+    "deploy_stage",
+    "deploy_done",
+    "deploy_failed",
 ]
-Phase = Literal["propose", "apply"]
+Phase = Literal["propose", "apply", "deploy"]
 
 EmitData = Callable[[str, dict[str, Any]], None]
 

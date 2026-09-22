@@ -244,8 +244,117 @@ class HeroVideoPlan(BaseModel):
         return f"hero-{self.source}-{key}-{start}-{duration}"
 
 
-TileMedium = Literal["flat-vector", "lettering", "photo", "illustration", "3d-icons", "mockup"]
+TileMedium = Literal[
+    "flat-vector",
+    "lettering",
+    "photo",
+    "illustration",
+    "3d-icons",
+    "mockup",
+    "ugc-selfie",
+    "ugc-candid",
+    "ugc-unboxing",
+    "lifestyle",
+    "device-screen",
+]
 TileModel = Literal["nano_banana_pro", "nano_banana_2"]
+
+# Visual vocabulary shared by creative analysis, competitor reads, showcase reads and tiles.
+# A format is what a media buyer would call one ad or image; a family is the hypothesis
+# space the agent picks a tile medium from.
+VisualFormat = Literal[
+    "ugc-selfie",
+    "ugc-candid",
+    "testimonial",
+    "unboxing",
+    "before-after",
+    "screenshot",
+    "studio-product",
+    "lifestyle",
+    "editorial",
+    "illustration",
+    "lettering",
+    "collage",
+    "other",
+]
+CameraFeel = Literal["phone", "studio", "graphic", "none"]
+VisualFamily = Literal["graphic", "studio", "ugc", "editorial", "screen"]
+VISUAL_FORMATS: tuple[str, ...] = (
+    "ugc-selfie",
+    "ugc-candid",
+    "testimonial",
+    "unboxing",
+    "before-after",
+    "screenshot",
+    "studio-product",
+    "lifestyle",
+    "editorial",
+    "illustration",
+    "lettering",
+    "collage",
+    "other",
+)
+CAMERA_FEELS: tuple[str, ...] = ("phone", "studio", "graphic", "none")
+_FORMAT_SYNONYMS = {
+    "before-after-split": "before-after",
+    "beforeafter": "before-after",
+    "ugc": "ugc-candid",
+    "ugc-photo": "ugc-candid",
+    "candid": "ugc-candid",
+    "selfie": "ugc-selfie",
+    "ugc-video": "ugc-candid",
+    "talking-head": "testimonial",
+    "review": "testimonial",
+    "product": "studio-product",
+    "product-shot": "studio-product",
+    "product-photo": "studio-product",
+    "studio": "studio-product",
+    "photo": "studio-product",
+    "mockup": "studio-product",
+    "flat-vector": "illustration",
+    "vector": "illustration",
+    "3d": "illustration",
+    "3d-render": "illustration",
+    "flat": "illustration",
+    "cartoon": "illustration",
+    "typography": "lettering",
+    "type": "lettering",
+    "text": "lettering",
+    "ui": "screenshot",
+    "app-screenshot": "screenshot",
+    "screen-recording": "screenshot",
+    "meme": "collage",
+    "lifestyle-photo": "lifestyle",
+    "editorial-photo": "editorial",
+}
+
+
+def normalize_visual_format(value: Any) -> str | None:
+    """Gemini free text -> one VisualFormat. Unknown words become 'other' rather than failing
+    the whole analysis; empty becomes None."""
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    text = re.sub(r"[\s_/]+", "-", text).strip("-")
+    text = _FORMAT_SYNONYMS.get(text, text)
+    return text if text in VISUAL_FORMATS else "other"
+
+
+def normalize_camera_feel(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in {"handheld", "smartphone", "iphone", "mobile"}:
+        return "phone"
+    if text in {"render", "rendered", "drawn", "illustration", "vector"}:
+        return "graphic"
+    return text if text in CAMERA_FEELS else None
+
+
 ROUTE_TO_MODEL = {
     "nano_banana_2_t2i__falai": "nano_banana_2",
     "nano_banana_pro_t2i__falai": "nano_banana_pro",
@@ -498,6 +607,10 @@ class CreativeAnalysis(BaseModel):
     visual_elements: list[str] = Field(default_factory=list, alias="visualElements")
     composition: str | None = None
     medium: str | None = None
+    # Schema v3: the ad's production format, for the visual-landscape tool.
+    format: VisualFormat | None = None
+    has_real_person: bool | None = Field(default=None, alias="hasRealPerson")
+    camera_feel: CameraFeel | None = Field(default=None, alias="cameraFeel")
 
     @field_validator("visible_text", "product_claims", "palette", "visual_elements", mode="before")
     @classmethod
@@ -506,6 +619,16 @@ class CreativeAnalysis(BaseModel):
         if isinstance(value, str):
             return [line.strip() for line in value.splitlines() if line.strip()]
         return value
+
+    @field_validator("format", mode="before")
+    @classmethod
+    def _format(cls, value: Any) -> Any:
+        return normalize_visual_format(value)
+
+    @field_validator("camera_feel", mode="before")
+    @classmethod
+    def _camera(cls, value: Any) -> Any:
+        return normalize_camera_feel(value)
 
 
 class CachedCreativeAnalysis(BaseModel):
@@ -597,6 +720,12 @@ class TileStyleRead(BaseModel):
     background: str | None = None
     composition: str | None = None
     has_text: bool = Field(default=False, alias="hasText")
+    format: VisualFormat | None = None
+
+    @field_validator("format", mode="before")
+    @classmethod
+    def _format(cls, value: Any) -> Any:
+        return normalize_visual_format(value)
 
 
 class GroupStyle(BaseModel):
@@ -637,6 +766,7 @@ class JudgeResult(BaseModel):
 
     stem: str
     model: str | None = None
+    family: str | None = None
     scores: list[CandidateScore] = Field(default_factory=list)
     chosen: int = 0
     reason: str = ""

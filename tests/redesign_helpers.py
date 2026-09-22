@@ -105,6 +105,7 @@ class FakeJudge:
         prompt: str,
         palette: list[str],
         lettering_text: str | None,
+        family: str,
     ) -> JudgeResult:
         self.calls.append(
             {
@@ -114,6 +115,7 @@ class FakeJudge:
                 "prompt": prompt,
                 "palette": list(palette),
                 "lettering_text": lettering_text,
+                "family": family,
             }
         )
         if self.fail:
@@ -133,7 +135,9 @@ class FakeJudge:
             )
             score.total = round(sum(w * value for w in JUDGE_WEIGHTS.values()), 2)
             scores.append(score)
-        return JudgeResult(stem=stem, model="fake-judge", scores=scores, chosen=pick, reason="fake")
+        return JudgeResult(
+            stem=stem, model="fake-judge", family=family, scores=scores, chosen=pick, reason="fake"
+        )
 
 
 def fake_media_tools(
@@ -182,6 +186,9 @@ class FakeReader:
                 "firstScreenSections": ["hero", "logos"],
                 "proofElements": ["logo strip"],
                 "notablePatterns": ["clip autoplays under the headline"],
+                "imageryFormats": ["ugc-candid", "Screenshot"],
+                "imageryStyle": ["phone-shot creator holding a poster"],
+                "peopleShown": True,
             }
         )
 
@@ -195,11 +202,12 @@ class FakeStyleReader:
         tiles = [
             TileStyleRead(
                 subject=f"{label} subject {index}",
-                medium="flat vector",
+                medium="photo" if label == "Photos" else "flat vector",
                 palette=["#111111", "#C8F520"],
                 background="flat solid",
                 composition="one centred subject",
                 has_text=False,
+                format="studio-product" if label == "Photos" else "illustration",
             )
             for index in range(len(images))
         ]

@@ -13,9 +13,10 @@ from .landing import get_current_landing
 from .memory import get_previous_runs
 from .metrics import get_landing_cta_metrics, load_latest_reports
 from .models import CachedCreativeAnalysis, MetricsSlice, RankedCreative, parse_model_output
-from .research import Browser, PatternReader, research_landing
+from .research import Browser, CachedResearch, PatternReader, research_landing
 from .showcase_style import StyleReader, read_showcase_style
 from .sources import media_sources
+from .visual_landscape import landscape_dict, load_cached_research, visual_landscape
 
 MAX_TOOL_CALLS = 12
 MAX_TOKENS = 4096
@@ -96,6 +97,18 @@ TOOL_SPECS = [
         ),
         "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
     },
+    {
+        "name": "get_visual_landscape",
+        "description": (
+            "Which visual families (graphic, studio, ugc, editorial, screen) the top paid ads, "
+            "the researched competitor landings, our own showcase tiles and previous runs use: "
+            "spend-weighted ad shares, what the ads validate but our landing lacks, what "
+            "competitors show that we do not, which families were already tested and how they "
+            "did, and the tile mediums available per family. No LLM. Call it after "
+            "research_landing and get_showcase_style, before choosing a tile medium."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
 ]
 
 
@@ -120,6 +133,7 @@ class ToolLoop:
         self.browser = browser
         self.reader = reader
         self.style_reader = style_reader
+        self.research: dict[str, CachedResearch] = {}
         self.calls = 0
 
     def system_prompt(self) -> str:
@@ -187,11 +201,36 @@ class ToolLoop:
             if not url:
                 return {"error": "url is required"}
             record = research_landing(url, self.settings, browser=self.browser, reader=self.reader)
+            if record.read is not None:
+                self.research[record.url] = record
             return json.loads(record.model_dump_json(by_alias=True))
         if name == "get_showcase_style":
             style = read_showcase_style(self.settings, reader=self.style_reader)
             return json.loads(style.model_dump_json(by_alias=True))
+        if name == "get_visual_landscape":
+            return self._visual_landscape()
         return {"error": f"unknown tool {name}"}
+
+    def _visual_landscape(self) -> dict[str, Any]:
+        ranked = self._ranked()
+        for item in ranked:
+            if item.creative_id not in self.analyses:
+                self.analyses[item.creative_id] = analyze_creative(
+                    item, self.settings, call_model=bool(self.settings.gemini_api_key)
+                )
+        research = {r.url: r for r in load_cached_research(self.settings)}
+        research.update(self.research)
+        style = read_showcase_style(self.settings, reader=self.style_reader)
+        previous = get_previous_runs(self.settings, experiment_type="landing_redesign", limit=10)
+        landscape = visual_landscape(
+            ranked, self.analyses.values(), research.values(), style, previous
+        )
+        if self.settings.glam_api_key:
+            landscape.notes.append(
+                "image backend is glam (text only): tiles take no references, so a ugc group "
+                "cannot lock the same person across slots and tile:/creative: refs are dropped."
+            )
+        return landscape_dict(landscape)
 
 
 def run_tool_loop(settings: Settings, tools: ToolLoop) -> Any:

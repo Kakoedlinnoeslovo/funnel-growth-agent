@@ -14,7 +14,7 @@ from .config import Settings
 from .models import CachedCreativeAnalysis, CreativeAnalysis, RankedCreative
 
 # Bump when the describe prompt or CreativeAnalysis gains fields; cached reads re-run.
-ANALYSIS_SCHEMA_VERSION = 2
+ANALYSIS_SCHEMA_VERSION = 3
 
 ModelCall = Callable[[RankedCreative, Path | None], CreativeAnalysis]
 
@@ -72,7 +72,13 @@ def _gemini_call(
                 "a designer could lift into a landing tile, e.g. 'before/after split of one "
                 "object', 'acid lime headline on black', 'thick-outline cartoon over photo'), "
                 "composition (one sentence), medium (photo, flat vector, 3d, lettering, "
-                "collage, screenshot...)."
+                "collage, screenshot...), format (exactly one of: ugc-selfie, ugc-candid, "
+                "testimonial, unboxing, before-after, screenshot, studio-product, lifestyle, "
+                "editorial, illustration, lettering, collage, other; the production format a "
+                "media buyer would name), hasRealPerson (boolean: a real human face or hands "
+                "are visible), cameraFeel (one of phone, studio, graphic, none: phone = looks "
+                "shot on a handheld phone with available light and imperfections; studio = "
+                "controlled lighting and polish; graphic = rendered or drawn, no camera)."
             )
         )
     ]
@@ -89,7 +95,10 @@ def _gemini_call(
     response = client.models.generate_content(
         model=settings.gemini_model,
         contents=parts,
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        ),
     )
     return CreativeAnalysis.model_validate(json.loads(response.text or "{}"))
 
@@ -110,13 +119,13 @@ def analyze_creative(
                 break
     fingerprint = asset_fingerprint(asset)
     cache_file = _cache_path(settings, creative.creative_id)
+    stale: CachedCreativeAnalysis | None = None
     if not refresh and cache_file.is_file():
         cached = CachedCreativeAnalysis.model_validate_json(cache_file.read_text(encoding="utf-8"))
-        if (
-            cached.asset_fingerprint == fingerprint
-            and cached.schema_version == settings.analysis_schema_version
-        ):
-            return cached
+        if cached.asset_fingerprint == fingerprint:
+            if cached.schema_version == settings.analysis_schema_version:
+                return cached
+            stale = cached
 
     analysis: CreativeAnalysis
     model_name = "title-body-fallback"
@@ -132,6 +141,9 @@ def analyze_creative(
         runner = call_model
 
     if runner is None or (asset is None and call_model is not True):
+        if stale is not None and stale.model != "title-body-fallback":
+            # No model to re-run: an older Gemini read beats overwriting it with title/body.
+            return stale
         analysis = _fallback(creative)
     else:
         try:

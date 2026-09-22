@@ -85,9 +85,19 @@ def test_propose_redesign_uses_research_and_sources_but_writes_memory_only(setti
             ("get_current_landing", {}),
             ("get_media_sources", {}),
             ("research_landing", {"url": "https://www.kittl.com/"}),
+            ("get_visual_landscape", {}),
         ],
     )
     result = propose(settings, model=model, browser=FakeBrowser(), reader=FakeReader())
+    landscape = model.results["get_visual_landscape"]
+    assert [f["family"] for f in landscape["families"]] == [
+        "graphic",
+        "studio",
+        "ugc",
+        "editorial",
+        "screen",
+    ]
+    assert "https://www.kittl.com/" in landscape["families"][2]["competitorUrls"]
     assert result.experiment_type == "landing_redesign"
     assert result.changes.media.hero_video.video_id == "z0r74lakHOM"
     sources = model.results["get_media_sources"]

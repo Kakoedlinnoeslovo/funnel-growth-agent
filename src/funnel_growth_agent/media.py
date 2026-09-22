@@ -33,7 +33,14 @@ from .models import (
     ShowcaseImagePlan,
 )
 from .sources import creative_image_path
-from .tile_prompt import ReferenceRole, build_tile_prompt, reference_kind, variant_prompts
+from .tile_prompt import (
+    ReferenceRole,
+    build_tile_prompt,
+    family_of_medium,
+    reference_kind,
+    style_of,
+    variant_prompts,
+)
 
 Emit = Callable[[str, str], None]
 
@@ -54,6 +61,31 @@ JUDGE_WEIGHTS = {
     "cleanliness": 0.20,
     "crop_safety": 0.15,
     "palette_adherence": 0.15,
+}
+# Phone photos live or die on hands, faces and invented text; a natural palette matters less.
+JUDGE_WEIGHTS_BY_FAMILY: dict[str, dict[str, float]] = {
+    "default": JUDGE_WEIGHTS,
+    "ugc": {
+        "house_style": 0.30,
+        "subject_clarity": 0.20,
+        "cleanliness": 0.30,
+        "crop_safety": 0.15,
+        "palette_adherence": 0.05,
+    },
+    "editorial": {
+        "house_style": 0.30,
+        "subject_clarity": 0.20,
+        "cleanliness": 0.25,
+        "crop_safety": 0.15,
+        "palette_adherence": 0.10,
+    },
+    "screen": {
+        "house_style": 0.25,
+        "subject_clarity": 0.20,
+        "cleanliness": 0.30,
+        "crop_safety": 0.15,
+        "palette_adherence": 0.10,
+    },
 }
 CLEANLINESS_VETO = 4
 
@@ -264,6 +296,7 @@ class GeminiImageClient:
                 ),
                 seed=seed,
                 temperature=1.0,
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             )
             contents = [*ref_parts, types.Part.from_text(text=prompt)]
             last: Exception | None = None
@@ -449,6 +482,63 @@ class HttpGlamClient:
 # Judge
 
 
+JUDGE_RUBRIC: dict[str, str] = {
+    "default": (
+        "- houseStyle: matches the rendering technique, saturation, lighting and finish of the "
+        "reference tiles\n"
+        "- subjectClarity: exactly one hero subject, readable at thumbnail size, not a collage\n"
+        "- cleanliness: no stray letters, text, watermarks, logos, UI or rendering artefacts; any "
+        "unintended text scores 3 or lower\n"
+        "- cropSafety: the subject and everything important sit inside the central 4:3 area; the "
+        "outer eighth on the left and right is cut off\n"
+        "- paletteAdherence: uses only {palette} with one dominant colour\n"
+    ),
+    "ugc": (
+        "- houseStyle: reads as an authentic phone photo of a real person or place: candid, "
+        "available light, true skin texture, believable clutter, and it sits next to the "
+        "reference tiles in subject scale and colour temperature; a polished studio render or "
+        "an obviously posed stock photo scores 3 or lower\n"
+        "- subjectClarity: one person and one object are the point of the photo, readable at "
+        "thumbnail size\n"
+        "- cleanliness: no AI artefacts: plastic or waxy skin, extra or fused fingers, warped "
+        "hands, melted objects, garbled or invented text, watermarks, logos, phone UI or device "
+        "frames; real-world clutter is fine and not penalised; any readable invented text or a "
+        "deformed hand scores 3 or lower\n"
+        "- cropSafety: the whole person and the object sit inside the central 4:3 area; the "
+        "outer eighth on the left and right is cut off\n"
+        "- paletteAdherence: {palette} leads through clothing, object and light; other natural "
+        "colours are allowed\n"
+    ),
+    "editorial": (
+        "- houseStyle: reads as a magazine-grade lifestyle photograph in a real place with "
+        "natural light, and it sits next to the reference tiles in subject scale and colour "
+        "temperature; a flat studio sweep or a phone snapshot scores 3 or lower\n"
+        "- subjectClarity: exactly one hero subject in a real setting, readable at thumbnail "
+        "size\n"
+        "- cleanliness: no AI artefacts: plastic skin, extra or fused fingers, warped hands, "
+        "melted objects, garbled or invented text, watermarks, logos or UI; believable props are "
+        "fine; any readable invented text or a deformed hand scores 3 or lower\n"
+        "- cropSafety: the subject and everything important sit inside the central 4:3 area; the "
+        "outer eighth on the left and right is cut off\n"
+        "- paletteAdherence: {palette} leads through clothing, object and light; other natural "
+        "colours are allowed\n"
+    ),
+    "screen": (
+        "- houseStyle: a real phone or laptop in a real scene whose screen shows only the "
+        "finished artwork, and it sits next to the reference tiles in subject scale and colour "
+        "temperature\n"
+        "- subjectClarity: one device and the artwork on it are the point of the photo, readable "
+        "at thumbnail size\n"
+        "- cleanliness: the device frame and soft generic interface edges are intended; any "
+        "readable invented interface text, buttons, menus, logos or watermarks score 3 or "
+        "lower, as do warped hands or melted devices\n"
+        "- cropSafety: the device and the hands sit inside the central 4:3 area; the outer "
+        "eighth on the left and right is cut off\n"
+        "- paletteAdherence: {palette} leads through the artwork, the device and the light; "
+        "other natural colours are allowed\n"
+    ),
+}
+
 JUDGE_PROMPT = (
     "You are judging generated showcase tiles for one gallery of a marketing landing page.\n"
     "Images 1-{ref_count} are REFERENCE images: real tiles from the same gallery (house style) "
@@ -456,20 +546,20 @@ JUDGE_PROMPT = (
     "Images {first_cand}-{last_cand} are CANDIDATES generated from this prompt:\n"
     '"{prompt}"\n'
     "Score every candidate 0-10 on each criterion:\n"
-    "- houseStyle: matches the rendering technique, saturation, lighting and finish of the "
-    "reference tiles\n"
-    "- subjectClarity: exactly one hero subject, readable at thumbnail size, not a collage\n"
-    "- cleanliness: no stray letters, text, watermarks, logos, UI or rendering artefacts; any "
-    "unintended text scores 3 or lower\n"
-    "- cropSafety: the subject and everything important sit inside the central 4:3 area; the "
-    "outer eighth on the left and right is cut off\n"
-    "- paletteAdherence: uses only {palette} with one dominant colour\n"
+    "{rubric}"
     "Intended text: {lettering}. Count intended text as correct, not stray.\n"
     'Return JSON only: {{"candidates":[{{"index":1,"houseStyle":0,"subjectClarity":0,'
     '"cleanliness":0,"cropSafety":0,"paletteAdherence":0,"notes":"one sentence"}}],'
     '"best":1,"reason":"one sentence"}}\n'
     "Index candidates from 1 in the order shown. Do not give design advice."
 )
+
+
+def judge_family(medium: str | None) -> str:
+    """The rubric and weights a tile is judged by: its visual family when it has its own,
+    else the studio/graphic default."""
+    family = family_of_medium(medium)
+    return family if family in JUDGE_RUBRIC else "default"
 
 
 class TileJudge(Protocol):
@@ -482,12 +572,17 @@ class TileJudge(Protocol):
         prompt: str,
         palette: list[str],
         lettering_text: str | None,
+        family: str,
     ) -> JudgeResult: ...
 
 
-def score_candidates(raw: list[dict[str, Any]], n: int) -> tuple[list[CandidateScore], int]:
+def score_candidates(
+    raw: list[dict[str, Any]], n: int, family: str = "default"
+) -> tuple[list[CandidateScore], int]:
     """Local, deterministic totals from the judge's per-criterion scores; the judge's own
-    `best` is never trusted. Candidates with stray text are vetoed unless all are."""
+    `best` is never trusted. Candidates with stray text (or, for photo families, AI artefacts)
+    are vetoed unless all are."""
+    weights = JUDGE_WEIGHTS_BY_FAMILY.get(family, JUDGE_WEIGHTS)
 
     def clamp(row: dict[str, Any], key: str) -> int:
         try:
@@ -508,7 +603,7 @@ def score_candidates(raw: list[dict[str, Any]], n: int) -> tuple[list[CandidateS
             notes=str(row.get("notes") or ""),
         )
         score.total = round(
-            sum(weight * getattr(score, attr) for attr, weight in JUDGE_WEIGHTS.items()), 2
+            sum(weight * getattr(score, attr) for attr, weight in weights.items()), 2
         )
         scores.append(score)
     eligible = [s for s in scores if s.cleanliness >= CLEANLINESS_VETO] or scores
@@ -536,6 +631,7 @@ class GeminiTileJudge:
         prompt: str,
         palette: list[str],
         lettering_text: str | None,
+        family: str,
     ) -> JudgeResult:
         from google import genai
         from google.genai import types
@@ -550,25 +646,33 @@ class GeminiTileJudge:
             parts.append(
                 types.Part.from_bytes(data=candidate.read_bytes(), mime_type=image_mime(candidate))
             )
+        palette_text = ", ".join(palette) if palette else "the prompt's colours"
+        rubric = JUDGE_RUBRIC.get(family, JUDGE_RUBRIC["default"]).format(palette=palette_text)
         text = JUDGE_PROMPT.format(
             ref_count=len(references),
             first_cand=len(references) + 1,
             last_cand=len(references) + len(candidates),
             prompt=prompt,
-            palette=", ".join(palette) if palette else "the prompt's colours",
+            rubric=rubric,
             lettering=f'"{lettering_text}"' if lettering_text else "none",
         )
         parts.append(types.Part.from_text(text=text))
         response = client.models.generate_content(
             model=self.settings.gemini_model,
             contents=parts,
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            ),
         )
         data = json.loads(response.text or "{}")
-        scores, chosen = score_candidates(list(data.get("candidates") or []), len(candidates))
+        scores, chosen = score_candidates(
+            list(data.get("candidates") or []), len(candidates), family
+        )
         return JudgeResult(
             stem=stem,
             model=self.settings.gemini_model,
+            family=family,
             scores=scores,
             chosen=chosen,
             reason=str(data.get("reason") or ""),
@@ -958,7 +1062,8 @@ def generate_tile(
     )
     missing = [(k, path) for k, path in enumerate(candidates) if refresh or not path.is_file()]
     if missing:
-        prompts = variant_prompts(spec.prompt, variants)
+        axes = style_of(plan.medium).axes if plan.medium else None
+        prompts = variant_prompts(spec.prompt, variants, axes)
         seeds = tile_seeds(stem, variants)
         emit(
             "media",
@@ -981,9 +1086,12 @@ def generate_tile(
     for index, path in enumerate(present):
         emit_to(on_data, "tile_candidate", {"stem": stem, "index": index, "path": str(path)})
     judge: JudgeResult | None
+    family = judge_family(plan.medium)
     if tools.judge is None:
         emit("media", "no judge configured; using candidate #0")
-        judge = JudgeResult(stem=stem, chosen=0, reason="no judge configured", fallback=True)
+        judge = JudgeResult(
+            stem=stem, family=family, chosen=0, reason="no judge configured", fallback=True
+        )
     else:
         try:
             judge = tools.judge.judge(
@@ -993,6 +1101,7 @@ def generate_tile(
                 prompt=spec.prompt,
                 palette=list(plan.palette),
                 lettering_text=plan.lettering_text,
+                family=family,
             )
             picked = judge.scores[judge.chosen] if judge.scores else None
             total = f"{picked.total:.1f}" if picked else "n/a"
@@ -1000,7 +1109,11 @@ def generate_tile(
         except Exception as error:  # noqa: BLE001 - judge failure must not stop apply
             emit("media", f"judge failed ({str(error)[:120]}); using candidate #0")
             judge = JudgeResult(
-                stem=stem, chosen=0, reason=f"judge failed: {str(error)[:200]}", fallback=True
+                stem=stem,
+                family=family,
+                chosen=0,
+                reason=f"judge failed: {str(error)[:200]}",
+                fallback=True,
             )
     judge_path.write_text(judge.model_dump_json(by_alias=True, indent=2), encoding="utf-8")
     emit_to(on_data, "tile_judged", tile_judged_data(judge))
