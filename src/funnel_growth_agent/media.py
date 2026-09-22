@@ -32,7 +32,7 @@ from .models import (
     MediaPlan,
     ShowcaseImagePlan,
 )
-from .sources import creative_image_path
+from .sources import creative_image_path, creative_video_path
 from .tile_prompt import (
     ReferenceRole,
     build_tile_prompt,
@@ -140,16 +140,26 @@ def base_showcase_groups(
     if not landing.is_file():
         return {}
     doc = _safe_yaml.load(landing.read_text(encoding="utf-8")) or {}
-    out: dict[str, tuple[str | None, list[str]]] = {}
-    for section in ((doc.get("props") or {}).get("sections")) or []:
-        if section.get("component") != "showcase":
-            continue
-        for group in section.get("groups") or []:
-            label = str(group.get("label") or "")
-            if label and label not in out:
-                out[label] = (group.get("caption"), [str(x) for x in group.get("images") or []])
-        break
-    return out
+    from .landing import landing_image_targets
+
+    groups = landing_image_targets(((doc.get("props") or {}).get("sections")) or [])
+    return {
+        label: (caption, [str(container[key]) for container, key in targets])
+        for label, (caption, targets) in groups.items()
+    }
+
+
+def resolve_landing_asset(settings: Settings, version: str, reference: str) -> Path:
+    root = settings.pricing_lab_dir / "funnels"
+    if reference.startswith("_shared/"):
+        path = root / reference
+    elif "/" not in reference and "." not in reference:
+        path = root / "_shared/assets/display" / f"{reference}.webp"
+    else:
+        path = root / version / reference
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise ApplyError("Landing asset escapes the pricing lab")
+    return path
 
 
 def resolve_references(
@@ -163,7 +173,6 @@ def resolve_references(
     if len(plan.references) > MAX_STYLE_REFS:
         raise ApplyError(f"media: at most {MAX_STYLE_REFS} references per tile")
     groups = base_showcase_groups(settings, base_version)
-    funnel_dir = settings.pricing_lab_dir / "funnels" / base_version
     out: list[ResolvedReference] = []
     for ref in plan.references:
         kind = reference_kind(ref)
@@ -186,7 +195,7 @@ def resolve_references(
             index = int(index_text)
             if index >= len(images):
                 raise ApplyError(f"media: reference {ref!r}: group {label!r} has no image {index}")
-            path = funnel_dir / images[index]
+            path = resolve_landing_asset(settings, base_version, images[index])
             if not path.is_file():
                 raise ApplyError(f"media: reference {ref!r}: {path} is missing")
         out.append(ResolvedReference(ref=ref, kind=kind, path=path, fingerprint=_fingerprint(path)))
@@ -769,7 +778,7 @@ def fetch_youtube(video_id: str, settings: Settings, tools: MediaTools, emit: Em
 
 
 def creative_source(creative_id: str, settings: Settings) -> Path:
-    path = settings.growth_loop_dir / "data" / "output" / "creative" / "live" / f"{creative_id}.mp4"
+    path = creative_video_path(settings, creative_id)
     if not path.is_file():
         raise ApplyError(f"media: creative {creative_id} has no local mp4 at {path}")
     return path

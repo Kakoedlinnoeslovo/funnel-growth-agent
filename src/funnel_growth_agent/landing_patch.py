@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
-from .landing import resolve_section_ids
-from .landing_diff import ApplyError, ProducedFiles
+from .landing import HERO_COMPONENTS, landing_image_targets, resolve_section_ids
+from .landing_diff import ApplyError, ProducedFiles, check_landing_diff, load_safe
 from .models import (
     CompositionChanges,
     HeroCopyChanges,
@@ -64,13 +65,33 @@ def _apply_inline(section: dict[str, Any], copy: InlineCtaCopy) -> None:
         section["ctaLabel"] = copy.cta_label
 
 
+def _apply_hero(section: dict[str, Any], copy: SectionCopy | HeroCopyChanges) -> None:
+    kind = section.get("component")
+    if kind == "hero-carousel":
+        if copy.reassurance is not None:
+            raise ApplyError("Carousel heroes do not have a reassurance field")
+        for slide in section.get("slides") or []:
+            _apply_copy(slide, copy)
+    elif kind == "quiz-hero":
+        if copy.cta_label is not None or copy.reassurance is not None:
+            raise ApplyError("Quiz heroes use their existing choices as the CTA")
+        if copy.headline is not None:
+            section["headline"] = (
+                " ".join(copy.headline) if isinstance(copy.headline, list) else copy.headline
+            )
+        if copy.subhead is not None:
+            section["subhead"] = copy.subhead
+    else:
+        _apply_copy(section, copy)
+
+
 def patch_hero_copy(landing_path: Path, changes: HeroCopyChanges) -> None:
     doc = load_yaml(landing_path)
     sections = ((doc.get("props") or {}).get("sections")) or []
     for section in sections:
         component = section.get("component")
-        if component == "kittl-hero":
-            _apply_copy(section, changes)
+        if component in HERO_COMPONENTS:
+            _apply_hero(section, changes)
         elif component == "video-cta" and changes.video_cta:
             _apply_copy(section, changes.video_cta)
         elif component == "final-cta" and changes.final_cta:
@@ -144,8 +165,8 @@ def patch_redesign(
     for section in seq:
         component = section.get("component")
         if copy is not None:
-            if component == "kittl-hero" and copy.hero:
-                _apply_copy(section, copy.hero)
+            if component in HERO_COMPONENTS and copy.hero:
+                _apply_hero(section, copy.hero)
             elif component == "video-cta" and copy.video_cta:
                 _apply_copy(section, copy.video_cta)
             elif component == "final-cta" and copy.final_cta:
@@ -157,6 +178,8 @@ def patch_redesign(
                 section["layout"] = changes.layout.layout
             if changes.layout.sticky_cta is not None:
                 section["stickyCta"] = changes.layout.sticky_cta
+        elif component in HERO_COMPONENTS and changes.layout and not changes.layout.is_empty():
+            raise ApplyError("Hero layout options only apply to kittl-hero baselines")
 
     if media is not None:
         if media.hero_video_ref:
@@ -167,21 +190,53 @@ def patch_redesign(
                 raise ApplyError("landing.yaml has no kittl-hero section for the clip")
             hero["video"] = _video_map(media.hero_video_ref)
         for (label, slot), ref in media.showcase.items():
-            group = None
-            for section in seq:
-                if section.get("component") != "showcase":
-                    continue
-                for candidate in section.get("groups") or []:
-                    if candidate.get("label") == label:
-                        group = candidate
-                        break
-                if group is not None:
-                    break
+            group = landing_image_targets(list(seq)).get(label)
             if group is None:
                 raise ApplyError(f"media: showcase group {label!r} not found on the landing")
-            images = group.get("images") or []
-            if slot >= len(images):
+            targets = group[1]
+            if slot >= len(targets):
                 raise ApplyError(f"media: showcase group {label!r} has no slot {slot}")
-            images[slot] = ref
+            container, key = targets[slot]
+            container[key] = ref
     dump_yaml(landing_path, doc)
     return order
+
+
+def validate_landing_changes(
+    landing_path: Path, changes: RedesignChanges | HeroCopyChanges
+) -> None:
+    """Dry-run the real patch and allowlist before spending time on generated media.
+
+    Placeholder references validate the planned media slots without creating any assets.
+    The real apply still checks the actual files and runs the pricing-lab validator.
+    """
+    with TemporaryDirectory(prefix="landing-preflight-") as folder:
+        target = Path(folder) / "landing.yaml"
+        target.write_bytes(landing_path.read_bytes())
+        files = ProducedFiles()
+        if isinstance(changes, RedesignChanges):
+            video = None
+            images = {}
+            if changes.media:
+                for index, tile in enumerate(changes.media.showcase):
+                    images[tile.group, tile.slot] = f"assets/showcase/preflight-{index}.webp"
+                if changes.media.hero_video:
+                    video = {"label": changes.media.hero_video.label}
+                    for size, width in (("desktop", 1280), ("phone", 720)):
+                        video[size] = {
+                            "mp4": f"assets/video/preflight-{width}.mp4",
+                            "webm": f"assets/video/preflight-{width}.webm",
+                            "poster": f"assets/video/preflight-{width}.webp",
+                        }
+            files = ProducedFiles(
+                showcase=frozenset(images.values()),
+                hero_video=frozenset(
+                    ref
+                    for size in ("desktop", "phone")
+                    for ref in (video or {}).get(size, {}).values()
+                ),
+            )
+            patch_redesign(target, changes, ProducedMedia(video, images, files))
+        else:
+            patch_hero_copy(target, changes)
+        check_landing_diff(load_safe(landing_path), load_safe(target), files)

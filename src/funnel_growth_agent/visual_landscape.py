@@ -128,10 +128,10 @@ class VisualLandscape(BaseModel):
 
 
 def _weights(ranked: list[RankedCreative]) -> dict[str, float]:
-    if any(item.spend > 0 for item in ranked):
-        return {item.creative_id: max(item.spend, 0.0) for item in ranked}
-    if any(item.clicks > 0 for item in ranked):
-        return {item.creative_id: float(max(item.clicks, 0)) for item in ranked}
+    if any((item.spend or 0) > 0 for item in ranked):
+        return {item.creative_id: max(item.spend or 0, 0.0) for item in ranked}
+    if any((item.clicks or 0) > 0 for item in ranked):
+        return {item.creative_id: float(max(item.clicks or 0, 0)) for item in ranked}
     return {item.creative_id: 1.0 for item in ranked}
 
 
@@ -218,8 +218,11 @@ def visual_landscape(
         )
         for family in FAMILIES
     ]
+    has_traffic = any((item.spend or 0) > 0 or (item.clicks or 0) > 0 for item in ranked)
     ads_validate = [
-        f.family for f in families if f.ad_share >= SHARE_THRESHOLD and f.landing_tiles == 0
+        f.family
+        for f in families
+        if has_traffic and f.ad_share >= SHARE_THRESHOLD and f.landing_tiles == 0
     ]
     competitors = [f.family for f in families if f.competitor_urls and f.landing_tiles == 0]
     blocked = [
@@ -228,6 +231,16 @@ def visual_landscape(
     untested = [f.family for f in families if not f.tested]
 
     notes: list[str] = []
+    if not has_traffic:
+        notes.append(
+            "No measured spend or clicks: shares describe creative counts, not performance. "
+            "Use these selected creatives as design direction, not validated traffic evidence."
+        )
+    elif any(item.spend is None and item.clicks is None for item in ranked):
+        notes.append(
+            "Uploaded creatives have no measured traffic and add no weight to performance shares; "
+            "their creative IDs and analyses still inform the page's design."
+        )
     screenshot_share = (
         sum(
             weights.get(item.creative_id, 0.0)

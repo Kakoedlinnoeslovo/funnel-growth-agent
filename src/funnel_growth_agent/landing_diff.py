@@ -9,7 +9,7 @@ from typing import Any
 
 from ruamel.yaml import YAML
 
-from .landing import resolve_section_ids
+from .landing import HERO_COMPONENTS, landing_image_targets, resolve_section_ids
 from .models import MAX_OMIT, MOVABLE_COMPONENTS, OMITTABLE_COMPONENTS
 
 _safe = YAML(typ="safe")
@@ -20,6 +20,7 @@ TEXT_ALLOWED: dict[str, set[str]] = {
     "video-cta": {"headline", "subhead", "ctaLabel", "reassurance"},
     "final-cta": {"headline", "subhead", "ctaLabel", "reassurance"},
     "inline-cta": {"headline", "ctaLabel"},
+    "quiz-hero": {"headline", "subhead"},
 }
 NEW_FILE_RE = re.compile(
     r"^assets/(video|showcase|thumbs/showcase)/[a-z0-9][a-z0-9-]*\.(mp4|webm|webp)$"
@@ -164,7 +165,7 @@ def check_landing_diff(
             raise ApplyError(f"hard-diff allowlist: {sid} cannot be omitted")
     if len(omitted) > MAX_OMIT:
         raise ApplyError(f"hard-diff allowlist: at most {MAX_OMIT} sections may be omitted")
-    if not new_ids or new_ids[0] != old_ids[0] or component(new_ids[0]) != "kittl-hero":
+    if not new_ids or new_ids[0] != old_ids[0] or component(new_ids[0]) not in HERO_COMPONENTS:
         raise ApplyError("hard-diff allowlist: kittl-hero must stay the first section")
     if (
         any(component(sid) == "final-cta" for sid in old_ids)
@@ -211,6 +212,23 @@ def check_landing_diff(
                 and not new_section.get("video")
             ):
                 raise ApplyError("hard-diff allowlist: layout video-first needs a hero video")
+        elif kind in {"hero-carousel", "quiz-hero"}:
+            collection = "slides" if kind == "hero-carousel" else "choices"
+            for path in paths:
+                match = re.fullmatch(rf"{collection}\[(\d+)\]\.image", path)
+                if match:
+                    value = new_section[collection][int(match.group(1))]["image"]
+                    if value not in produced.showcase:
+                        raise ApplyError(f"hard-diff allowlist: {sid} image was not produced")
+                    referenced.add(value)
+                elif kind == "hero-carousel" and re.fullmatch(
+                    r"slides\[\d+\]\.(headline(?:\[\d+\])?|subhead|ctaLabel)", path
+                ):
+                    continue
+                elif kind == "quiz-hero" and _top_key(path) in TEXT_ALLOWED[kind]:
+                    continue
+                else:
+                    raise ApplyError(f"hard-diff allowlist: {sid} changed {path}")
         elif kind == "showcase":
             for path in paths:
                 match = SHOWCASE_IMAGE_RE.match(path)
@@ -233,6 +251,20 @@ def check_landing_diff(
             raise ApplyError(f"hard-diff allowlist: {sid} ({kind}) cannot change: {paths}")
         summary.append(f"{sid}: " + ", ".join(paths))
 
+    # Reusing a generated asset from a published baseline need not change its YAML reference.
+    for _caption, targets in landing_image_targets(new_sections).values():
+        referenced.update(
+            container[key] for container, key in targets if container[key] in produced.showcase
+        )
+    for section in new_sections:
+        if section.get("component") == "kittl-hero":
+            for source in (section.get("video") or {}).values():
+                if isinstance(source, dict):
+                    referenced.update(
+                        value
+                        for value in source.values()
+                        if isinstance(value, str) and value in produced.hero_video
+                    )
     # A thumb is never referenced by YAML; it rides along with its referenced full-size sibling.
     for thumb in produced.showcase_thumbs:
         if not thumb.startswith(THUMB_PREFIX) or thumb_sibling(thumb) not in produced.showcase:
@@ -258,10 +290,11 @@ def hard_diff_variant(
     if removed:
         raise ApplyError(f"hard-diff allowlist: variant removed base files {sorted(removed)}")
     extra = set(variant_files) - set(base_files)
-    if extra != set(produced.all):
+    expected_extra = set(produced.all) - set(base_files)
+    if extra != expected_extra:
         raise ApplyError(
             "hard-diff allowlist: variant file set differs from the base version: "
-            f"unexpected {sorted(extra - produced.all)}, missing {sorted(produced.all - extra)}"
+            f"unexpected {sorted(extra - produced.all)}, missing {sorted(expected_extra - extra)}"
         )
     for rel in sorted(extra):
         if not NEW_FILE_RE.match(rel):

@@ -5,7 +5,12 @@ from ruamel.yaml import YAML
 
 from funnel_growth_agent.landing import resolve_section_ids
 from funnel_growth_agent.landing_diff import ApplyError, ProducedFiles
-from funnel_growth_agent.landing_patch import ProducedMedia, compose_order, patch_redesign
+from funnel_growth_agent.landing_patch import (
+    ProducedMedia,
+    compose_order,
+    patch_redesign,
+    validate_landing_changes,
+)
 from funnel_growth_agent.models import CompositionChanges, RedesignChanges
 from redesign_helpers import redesign_proposal
 
@@ -21,6 +26,31 @@ IDS = [
     "plan-preview",
     "final-cta",
 ]
+
+
+def test_preflight_accepts_media_without_creating_assets_or_changing_baseline(settings):
+    before = settings.landing_path.read_bytes()
+    validate_landing_changes(settings.landing_path, redesign_proposal().changes)
+    assert settings.landing_path.read_bytes() == before
+    assert not settings.media_cache_dir.exists()
+
+
+def test_preflight_rejects_locked_gallery_reordering(tmp_path):
+    path = tmp_path / "landing.yaml"
+    path.write_text(
+        "props:\n  sections:\n"
+        "    - component: hero-carousel\n      slides: []\n"
+        "    - component: feature-gallery\n      headline: First\n"
+        "    - component: feature-gallery\n      headline: Second\n"
+        "    - component: final-cta\n      headline: Try it\n"
+    )
+    before = path.read_bytes()
+    changes = RedesignChanges.model_validate(
+        {"composition": {"order": ["feature-gallery-2", "feature-gallery", "final-cta"]}}
+    )
+    with pytest.raises(ApplyError, match="cannot change"):
+        validate_landing_changes(path, changes)
+    assert path.read_bytes() == before
 
 
 def test_compose_order_omit_only_keeps_base_order() -> None:

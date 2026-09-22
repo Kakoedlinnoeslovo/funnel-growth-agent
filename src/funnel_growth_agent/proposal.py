@@ -16,10 +16,13 @@ from .landing import get_current_landing, landing_hash
 from .memory import append_run, list_runs
 from .metrics import get_landing_cta_metrics, load_latest_reports
 from .models import (
+    CachedCreativeAnalysis,
     CreativeEvidence,
     LandingProposal,
     MemoryRow,
+    MetricsSlice,
     NoExperiment,
+    RankedCreative,
     SavedProposal,
     parse_model_output,
 )
@@ -31,7 +34,7 @@ class Completer(Protocol):
 
 def next_run_id(settings: Settings) -> str:
     stamp = settings.clock().strftime("%Y-%m-%dT%H%M")
-    prefix = f"{stamp}-{settings.base_version}-"
+    prefix = f"{stamp}-{settings.base_version.replace('/', '-')}-"
     count = sum(1 for row in list_runs(settings) if row.run_id.startswith(prefix))
     return f"{prefix}{count + 1:03d}"
 
@@ -109,6 +112,10 @@ def propose(
     reader: Any = None,
     style_reader: Any = None,
     on_event: EmitData | None = None,
+    creatives: list[RankedCreative] | None = None,
+    analyses: list[CachedCreativeAnalysis] | None = None,
+    metrics: MetricsSlice | None = None,
+    brief: str | None = None,
 ) -> SavedProposal:
     """Propose once. `on_event` (kind, data) sees the pipeline as it runs; see events.py."""
     try:
@@ -120,6 +127,10 @@ def propose(
             reader=reader,
             style_reader=style_reader,
             on_event=on_event,
+            creatives=creatives,
+            analyses=analyses,
+            metrics=metrics,
+            brief=brief,
         )
     except Exception as error:
         emit_to(on_event, "propose_failed", {"error": str(error)})
@@ -135,20 +146,31 @@ def _propose(
     reader: Any,
     style_reader: Any,
     on_event: EmitData | None,
+    creatives: list[RankedCreative] | None,
+    analyses: list[CachedCreativeAnalysis] | None,
+    metrics: MetricsSlice | None,
+    brief: str | None,
 ) -> SavedProposal:
     emit_to(
         on_event,
         "propose_started",
         {"baseVersion": settings.base_version, "model": settings.anthropic_model},
     )
-    metrics = get_landing_cta_metrics(settings)
-    weekly, _daily = load_latest_reports(settings)
-    ranked = get_top_creatives(weekly, settings)
-    analyses = analyze_ranked(
-        ranked,
-        settings,
-        refresh=refresh_creatives,
-        call_model=bool(settings.gemini_api_key),
+    metrics = metrics or get_landing_cta_metrics(settings)
+    if creatives is None:
+        weekly, _daily = load_latest_reports(settings)
+        ranked = get_top_creatives(weekly, settings)
+    else:
+        ranked = creatives
+    analyses = (
+        analyses
+        if analyses is not None
+        else analyze_ranked(
+            ranked,
+            settings,
+            refresh=refresh_creatives,
+            call_model=bool(settings.gemini_api_key),
+        )
     )
     landing_sha = landing_hash(settings.landing_path)
     emit_to(
@@ -171,15 +193,16 @@ def _propose(
         style_reader=style_reader,
         reader=reader,
         on_event=on_event,
+        selected=creatives is not None,
     )
     if model is None:
-        raw = run_tool_loop(settings, tools)
+        raw = run_tool_loop(settings, tools, brief=brief)
     else:
         raw = model.complete(
             [
                 {
                     "role": "user",
-                    "content": "Propose one landing redesign experiment or no_experiment.",
+                    "content": brief or "Propose one landing redesign experiment or no_experiment.",
                 }
             ],
             tools.system_prompt(),

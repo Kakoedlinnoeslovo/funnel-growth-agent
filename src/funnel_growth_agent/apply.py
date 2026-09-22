@@ -57,14 +57,15 @@ def next_variant_name(settings: Settings) -> str:
     taken = set(existing_variants(settings))
     index = 1
     while True:
-        name = f"{settings.base_version}_a{index}"
+        root = re.sub(r"_a[1-9][0-9]*$", "", settings.base_version)
+        name = f"{root}_a{index}"
         if name not in taken and not (settings.pricing_lab_dir / "funnels" / name).exists():
             return name
         index += 1
 
 
 def hyphenated(version: str) -> str:
-    return version.replace("_", "-")
+    return version.replace("_", "-").replace("/", "-")
 
 
 def patch_identities(funnel_path: Path, variant: str, experiment_type: str = "hero_copy") -> None:
@@ -227,6 +228,7 @@ def apply_run(
     on_event: Emit | None = None,
     tile_variants: int | None = None,
     on_data: EmitData | None = None,
+    variant_name: str | None = None,
 ) -> str:
     """Apply a proposed run as a new variant. `on_event` gets (stage, message) lines as before;
     `on_data` gets structured events (events.py) including every tile candidate and verdict."""
@@ -239,6 +241,7 @@ def apply_run(
             on_event=on_event,
             tile_variants=tile_variants,
             on_data=on_data,
+            variant_name=variant_name,
         )
     except Exception as error:
         emit_to(on_data, "apply_failed", {"runId": run_id, "error": str(error)})
@@ -254,6 +257,7 @@ def _apply_run(
     on_event: Emit | None,
     tile_variants: int | None,
     on_data: EmitData | None,
+    variant_name: str | None,
 ) -> str:
     row = get_run(settings, run_id)
     if row.status != "proposed":
@@ -276,7 +280,10 @@ def _apply_run(
     if media_plan is not None:
         check_media_plan(media_plan, proposal, settings)
 
-    variant = next_variant_name(settings)
+    variant = variant_name or next_variant_name(settings)
+    from .workflow_catalog import safe_version
+
+    safe_version(settings.pricing_lab_dir / "funnels", variant)
     dest = settings.pricing_lab_dir / "funnels" / variant
     if dest.exists():
         raise ApplyError(f"{variant} already exists; refuse overwrite")

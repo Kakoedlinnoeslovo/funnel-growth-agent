@@ -5,21 +5,50 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pydantic import TypeAdapter, ValidationError
+
 from .config import Settings
 from .creatives import get_top_creatives
 from .events import EmitData, emit_to
 from .gemini import analyze_creative
 from .landing import get_current_landing
+from .landing_patch import validate_landing_changes
 from .memory import get_previous_runs
 from .metrics import get_landing_cta_metrics, load_latest_reports
-from .models import CachedCreativeAnalysis, MetricsSlice, RankedCreative, parse_model_output
+from .models import (
+    CachedCreativeAnalysis,
+    LandingProposal,
+    MetricsSlice,
+    ModelOutput,
+    RankedCreative,
+    parse_model_output,
+)
 from .research import Browser, CachedResearch, PatternReader, research_landing
 from .showcase_style import StyleReader, read_showcase_style
 from .sources import media_sources
 from .visual_landscape import landscape_dict, load_cached_research, visual_landscape
 
 MAX_TOOL_CALLS = 12
-MAX_TOKENS = 4096
+MAX_TOKENS = 8192
+MAX_OUTPUT_RETRIES = 2
+
+
+def proposal_tool() -> dict[str, Any]:
+    """Use a tool argument for the final result instead of free-form JSON text."""
+    schema = TypeAdapter(ModelOutput).json_schema(by_alias=True)
+    definitions = schema.pop("$defs")
+    return {
+        "name": "submit_proposal",
+        "description": "Submit the complete final landing proposal or no_experiment decision.",
+        "input_schema": {
+            "type": "object",
+            "$defs": definitions,
+            "properties": {"proposal": schema},
+            "required": ["proposal"],
+            "additionalProperties": False,
+        },
+    }
+
 
 TOOL_SPECS = [
     {
@@ -124,6 +153,7 @@ class ToolLoop:
         reader: PatternReader | None = None,
         style_reader: StyleReader | None = None,
         on_event: EmitData | None = None,
+        selected: bool = False,
     ) -> None:
         self.settings = settings
         self.on_event = on_event
@@ -135,13 +165,48 @@ class ToolLoop:
         self.style_reader = style_reader
         self.research: dict[str, CachedResearch] = {}
         self.calls = 0
+        self.selected = selected
 
     def system_prompt(self) -> str:
         instructions = self.settings.instructions_path.read_text(encoding="utf-8")
         playbook = self.settings.playbook_path.read_text(encoding="utf-8")
         base = self.settings.base_version
-        header = f"Base landing version: {base} (the funnel `/` serves; variants are copies of it)."
-        return header + "\n\n" + instructions.strip() + "\n\n" + playbook.strip()
+        header = f"Selected base landing version: {base}. Create a separate variant from it."
+        prompt = header + "\n\n" + instructions.strip() + "\n\n" + playbook.strip()
+        if self.selected:
+            prompt += (
+                "\n\nCreative-to-landing mode overrides the automatic experiment-selection rules: "
+                "the user explicitly selected the baseline and creatives. get_top_creatives now "
+                "returns exactly that selection, including low-volume ads. Do not replace it "
+                "with another winner. Generate ONE shared Recraft landing combining ALL selected "
+                "themes through a main message and supporting copy and imagery. selectionReview "
+                "is advisory, including coherent=false. Mixed features or destination URLs never "
+                "justify no_experiment. Explain each creative's influence; omit unsupported claims "
+                "while still using its supported visual direction. Uploads have no performance "
+                "data. Uploaded video images are their first frame: visibleText is literal evidence, "
+                "ctaIntent is inferred. If the frame is blank or has no CTA, suggest wording from "
+                "the supported baseline context without claiming it appeared in the creative. "
+                "Preserve Recraft branding, pricing, supported claims and CTA destinations. "
+                "observedMetrics preserves unavailable values as null; never claim an absent "
+                "metric is an observed zero. A baseline with source=unavailable has no measured "
+                "conversion rate. "
+                "Weak, stale or missing metrics are limitations to disclose, not reasons to "
+                "refuse an explicitly requested draft. Never imply uplift is observed. "
+                "Preserve supported product claims and pricing. Use the supplied context and "
+                "reference research; explain which visual, copy and CTA choices it supports. "
+                "Revision instructions amend the supplied previous proposal; return the full "
+                "cumulative changes relative to the ORIGINAL selected baseline. "
+                "Only return no_experiment when the requested content cannot be supported."
+                " For section-based baselines, keep the actual first hero component in place. "
+                "copy.hero targets kittl-hero, every hero-carousel slide, or quiz-hero. "
+                "Carousel hero copy supports headline, subhead, ctaLabel only. Quiz hero copy "
+                "supports headline and subhead only; preserve question, choice ids and choice "
+                "labels. layout and media.heroVideo are only supported on kittl-hero. "
+                "get_current_landing.imageGroups also exposes editable carousel/quiz images: "
+                "use those group labels in media.showcase and their tile references exactly "
+                "as for showcase groups. Do not invent groups missing from that baseline."
+            )
+        return prompt
 
     def _ranked(self) -> list[RankedCreative]:
         if self.ranked is None:
@@ -233,7 +298,7 @@ class ToolLoop:
         return landscape_dict(landscape)
 
 
-def run_tool_loop(settings: Settings, tools: ToolLoop) -> Any:
+def run_tool_loop(settings: Settings, tools: ToolLoop, *, brief: str | None = None) -> Any:
     """Tool events come from `tools.execute`; the final parsed output is emitted as `proposal`."""
     if not settings.anthropic_api_key:
         raise RuntimeError("ANTHROPIC_API_KEY is not set")
@@ -243,43 +308,102 @@ def run_tool_loop(settings: Settings, tools: ToolLoop) -> Any:
     messages: list[dict[str, Any]] = [
         {
             "role": "user",
-            "content": (
-                "Propose one landing redesign experiment or no_experiment. Use tools as needed."
-            ),
+            "content": brief
+            or ("Propose one landing redesign experiment or no_experiment. Use tools as needed."),
         }
     ]
-    for _ in range(MAX_TOOL_CALLS + 1):
+    output_retries = 0
+    max_tokens = MAX_TOKENS
+    force_proposal = False
+    system = tools.system_prompt() + (
+        "\n\nSubmit the final JSON object through the submit_proposal tool's proposal argument. "
+        "Use the read tools first as needed. Do not write the final proposal as text. "
+        "The tool schema is authoritative for field names, types and allowed values."
+    )
+    for _ in range(MAX_TOOL_CALLS + MAX_OUTPUT_RETRIES + 1):
+        final_only = force_proposal or tools.calls >= MAX_TOOL_CALLS
         response = client.messages.create(
             model=settings.anthropic_model,
-            max_tokens=MAX_TOKENS,
-            system=tools.system_prompt(),
-            tools=TOOL_SPECS,
+            max_tokens=max_tokens,
+            system=system,
+            tools=([proposal_tool()] if final_only else [*TOOL_SPECS, proposal_tool()]),
+            tool_choice={"type": "tool", "name": "submit_proposal"}
+            if final_only
+            else {"type": "auto"},
             messages=messages,
         )
+        if response.stop_reason == "refusal":
+            raise ValueError("The model declined this proposal. Your saved draft is unchanged.")
+        if response.stop_reason == "max_tokens":
+            # A truncated tool block must never be executed or saved as a proposal.
+            if output_retries >= MAX_OUTPUT_RETRIES:
+                raise ValueError(
+                    "The model could not finish the landing proposal. "
+                    "Your selections are saved; retry generation."
+                )
+            output_retries += 1
+            max_tokens *= 2
+            emit_to(
+                tools.on_event,
+                "model_output_retry",
+                {"message": "The proposal was cut off; retrying with more room to finish."},
+            )
+            continue
         if response.stop_reason == "tool_use":
             tool_results = []
+            output = None
             messages.append({"role": "assistant", "content": response.content})
             for block in response.content:
                 if block.type != "tool_use":
                     continue
-                result = tools.execute(block.name, dict(block.input or {}), call_id=block.id)
+                invalid = False
+                if block.name == "submit_proposal":
+                    try:
+                        output = parse_model_output((block.input or {}).get("proposal"))
+                        if isinstance(output, LandingProposal):
+                            validate_landing_changes(settings.landing_path, output.changes)
+                        result = {"accepted": True}
+                    except (ValidationError, ValueError, TypeError, AttributeError) as error:
+                        invalid = True
+                        result = {
+                            "error": str(error),
+                            "instruction": "Correct these fields and submit the complete proposal again.",
+                        }
+                else:
+                    result = tools.execute(block.name, dict(block.input or {}), call_id=block.id)
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": block.id,
                         "content": json.dumps(result),
+                        "is_error": invalid,
                     }
                 )
             messages.append({"role": "user", "content": tool_results})
-            continue
-        text = "".join(
-            block.text for block in response.content if getattr(block, "type", None) == "text"
+            if output is not None and not any(item["is_error"] for item in tool_results):
+                emit_to(tools.on_event, "proposal", {"output": output.model_dump(by_alias=True)})
+                return output
+            if not any(item["is_error"] for item in tool_results):
+                continue
+        else:
+            # Never attempt to repair malformed JSON by dropping text or changing evidence.
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": "Submit the complete result using submit_proposal, not text or a code block.",
+                }
+            )
+        if output_retries >= MAX_OUTPUT_RETRIES:
+            raise ValueError(
+                "The model returned an invalid landing proposal after automatic retries. "
+                "Your selections are saved; retry generation."
+            )
+        output_retries += 1
+        force_proposal = True
+        emit_to(
+            tools.on_event,
+            "model_output_retry",
+            {"message": "Correcting the proposal format automatically; your selections are saved."},
         )
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1:
-            raise ValueError("Model returned no JSON object")
-        output = parse_model_output(json.loads(text[start : end + 1]))
-        emit_to(tools.on_event, "proposal", {"output": output.model_dump(by_alias=True)})
-        return output
     raise ValueError("Model exceeded the tool-call cap without a proposal")

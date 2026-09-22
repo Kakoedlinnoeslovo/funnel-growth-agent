@@ -28,10 +28,14 @@ def creative_live_dir(settings: Settings) -> Path:
 
 
 def creative_video_path(settings: Settings, creative_id: str) -> Path:
+    if path := settings.creative_paths.get(creative_id, {}).get("video"):
+        return Path(path)
     return creative_live_dir(settings) / f"{creative_id}.mp4"
 
 
 def creative_image_path(settings: Settings, creative_id: str) -> Path:
+    if path := settings.creative_paths.get(creative_id, {}).get("image"):
+        return Path(path)
     return creative_live_dir(settings) / f"{creative_id}.jpg"
 
 
@@ -41,6 +45,9 @@ def media_sources(settings: Settings, ranked: list[RankedCreative] | None) -> di
         local = Path(item.video_path) if item.video_path else None
         if local is None or not local.is_file():
             continue
+        # Short uploads still work as first-frame references, but cannot fill a 4s hero clip.
+        if item.video_duration is not None and item.video_duration < 4.1:
+            continue
         creatives.append(
             {
                 "creativeId": item.creative_id,
@@ -49,6 +56,7 @@ def media_sources(settings: Settings, ranked: list[RankedCreative] | None) -> di
                 "spend": item.spend,
                 "clicks": item.clicks,
                 "reasonSelected": item.reason_selected,
+                "duration": item.video_duration,
             }
         )
     return {

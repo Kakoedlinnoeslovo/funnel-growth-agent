@@ -11,6 +11,8 @@ data/media_cache/
 data/research/
 data/tmp/
 data/demo/
+data/drafts/
+data/uploads/
 # Clean data dir for demo recordings (holds downloaded clips and screenshots).
 data-demo/
 .superpowers/

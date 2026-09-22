@@ -206,3 +206,16 @@ def test_tool_loop_exposes_get_visual_landscape(settings) -> None:
     assert fresh.execute("get_visual_landscape", {})["competitorsUseWeLack"] == ["ugc", "screen"]
     settings.glam_api_key = "glm_x"
     assert any("glam" in note for note in fresh.execute("get_visual_landscape", {})["notes"])
+
+
+def test_uploaded_creatives_have_direction_without_measured_traffic() -> None:
+    upload = _ranked("upload").model_copy(update={"spend": None, "clicks": None})
+    analyses = [_analysis("upload", "ugc-candid"), _analysis("paid", "illustration")]
+    only_upload = visual_landscape([upload], analyses, [], None, [])
+    assert not only_upload.ads_validate_landing_lacks
+    assert any("not performance" in note for note in only_upload.notes)
+    assert next(f for f in only_upload.families if f.family == "ugc").ad_creative_ids == ["upload"]
+    mixed = visual_landscape([upload, _ranked("paid", spend=100)], analyses, [], None, [])
+    shares = {f.family: f.ad_share for f in mixed.families}
+    assert shares["ugc"] == 0 and shares["graphic"] == 1
+    assert any("no measured traffic" in note for note in mixed.notes)

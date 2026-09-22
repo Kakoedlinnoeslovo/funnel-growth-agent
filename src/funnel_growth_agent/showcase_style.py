@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from .config import Settings
 from .landing import landing_hash
-from .media import base_showcase_groups, image_mime
+from .media import base_showcase_groups, image_mime, resolve_landing_asset
 from .models import CachedShowcaseStyle, GroupStyle, TileStyleRead
 
 STYLE_PROMPT = (
@@ -63,7 +63,8 @@ class GeminiStyleReader:
 
 def style_cache_path(settings: Settings) -> Path:
     digest = landing_hash(settings.landing_path)[:8]
-    return settings.research_dir / f"showcase-{settings.base_version}-{digest}.json"
+    version = settings.base_version.replace("/", "-")
+    return settings.research_dir / f"showcase-{version}-{digest}.json"
 
 
 def _now() -> str:
@@ -100,10 +101,9 @@ def read_showcase_style(
                 error="gemini unavailable: GEMINI_API_KEY is not set",
             )
         reader = GeminiStyleReader(settings)
-    funnel_dir = settings.pricing_lab_dir / "funnels" / settings.base_version
     out: list[GroupStyle] = []
     for label, (caption, rels) in groups.items():
-        images = [funnel_dir / rel for rel in rels]
+        images = [resolve_landing_asset(settings, settings.base_version, rel) for rel in rels]
         missing = [str(path) for path in images if not path.is_file()]
         if missing:
             return CachedShowcaseStyle(
