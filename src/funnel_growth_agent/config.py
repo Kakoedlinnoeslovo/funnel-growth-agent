@@ -37,7 +37,8 @@ class Settings:
     glam_api_key: str | None = None
     browse_bin: Path | None = None
     tile_variants: int = 3
-    analysis_schema_version: int = 2
+    analysis_schema_version: int = 3
+    prod_landing_base: str | None = None
     now: str | None = None
 
     @property
@@ -136,4 +137,5 @@ def load_settings() -> Settings:
         browse_bin=Path(os.environ["GSTACK_BROWSE"]).expanduser()
         if os.getenv("GSTACK_BROWSE")
         else None,
+        prod_landing_base=os.getenv("PROD_LANDING_BASE") or None,
     )

@@ -270,6 +270,9 @@ def test_console_server_replays_a_recording_and_serves_only_allowlisted_assets(s
         assert any(s["event"] == "tile_judged" for s in seen)
         status, body, _ = _request(port, "GET", "/state")
         assert json.loads(body)["status"] == "live" and json.loads(body)["variant"] == "v7_a1"
+        assert not json.loads(body)["canDeploy"], "this recording has no deploy phase"
+        status, body, _ = _request(port, "POST", "/deploy")
+        assert status == 409
 
         candidate = next(s for s in seen if s["event"] == "tile_candidate")["data"]["data"]["path"]
         status, body, content_type = _request(port, "GET", "/asset/" + asset_id(candidate))
@@ -291,4 +294,105 @@ def test_console_server_replays_a_recording_and_serves_only_allowlisted_assets(s
 def test_console_html_is_packaged_and_never_injects_model_text() -> None:
     page = resources.files("funnel_growth_agent.demo").joinpath("console.html").read_text()
     assert "--lime:#C6F135" in page and "/events" in page and "/apply" in page
+    assert "/deploy" in page and "autodeploy" in page
     assert "innerHTML" not in page and "insertAdjacentHTML" not in page
+
+
+def test_console_deploy_runs_after_apply_and_reports_the_pull_request(
+    settings, monkeypatch
+) -> None:
+    """Live mode: D is only enabled once a variant is live and gh is signed in; the deploy
+    events flow through the same recorder and land the console on `deployed`."""
+    from funnel_growth_agent.demo import server as server_module
+
+    monkeypatch.setattr(server_module, "gh_ready", lambda lab, timeout=5.0: "roman")
+    monkeypatch.setattr(server_module, "dev_server_up", lambda url, timeout=1.5: True)
+
+    def fake_deploy(settings, variant, *, on_data=None, **_kw):
+        on_data("deploy_started", {"variant": variant, "branch": f"agent/{variant}"})
+        on_data("deploy_stage", {"variant": variant, "stage": "pr", "message": "#7 open"})
+        on_data(
+            "deploy_stage",
+            {"variant": variant, "stage": "merge", "message": "waiting for someone to merge #7"},
+        )
+        on_data(
+            "deploy_done",
+            {
+                "variant": variant,
+                "prUrl": "https://github.com/acme/lab/pull/7",
+                "prodUrl": "https://lab.vercel.app/pm/" + variant,
+                "merged": True,
+            },
+        )
+
+    import funnel_growth_agent.deploy as deploy_module
+
+    monkeypatch.setattr(deploy_module, "deploy_variant", fake_deploy)
+    server = make_server(settings, recording=None, live=True, port=0)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        _, body, _ = _request(port, "GET", "/state")
+        state = json.loads(body)
+        assert state["canDeploy"] and any(
+            "gh signed in as roman" in c["label"] for c in state["preflight"]
+        )
+        status, _, _ = _request(port, "POST", "/deploy")
+        assert status == 409, "nothing is live yet"
+        # Skip propose/apply: put the console where apply_done leaves it.
+        server.publish_event(
+            Event(
+                seq=1,
+                t=0,
+                ts="now",
+                phase="apply",
+                kind="apply_done",
+                data={"runId": "r", "variant": "v7_a1", "previewUrl": "x"},
+            )
+        )
+        assert server.state.status == "live"
+        status, _, _ = _request(port, "POST", "/deploy")
+        assert status == 202
+        seen = _read_sse_until(port, "deploy_done")
+        stages = [s["data"]["data"]["stage"] for s in seen if s["event"] == "deploy_stage"]
+        assert stages == ["pr", "merge"]
+        _, body, _ = _request(port, "GET", "/state")
+        state = json.loads(body)
+        assert state["status"] == "deployed"
+        assert state["prodUrl"] == "https://lab.vercel.app/pm/v7_a1"
+        assert state["prUrl"] == "https://github.com/acme/lab/pull/7"
+        assert server.recorder.events[-1].phase == "deploy"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_console_preflight_rechecks_the_lab_dev_server_on_state_requests(
+    settings, monkeypatch
+) -> None:
+    """The lab's `npm run dev` is usually started after the console, so the ✗ shown at boot
+    must clear once the page reloads and the dev server is up."""
+    from funnel_growth_agent.demo import server as server_module
+
+    up = {"value": False}
+    monkeypatch.setattr(server_module, "dev_server_up", lambda url, timeout=1.5: up["value"])
+    _, run_id = _record(settings)
+    recording = synthesize_recording(settings, run_id)
+    server = make_server(settings, recording=recording, live=False, port=0, speed=1000)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        lab = lambda state: next(c for c in state["preflight"] if "lab dev server" in c["label"])  # noqa: E731
+        assert not lab(server.state_dict())["ok"]
+        up["value"] = True
+        _, body, _ = _request(port, "GET", "/state")
+        assert lab(json.loads(body))["ok"]
+        server.state.status = "proposing"
+        up["value"] = False
+        _, body, _ = _request(port, "GET", "/state")
+        assert lab(json.loads(body))["ok"], "preflight is frozen while a run is in progress"
+    finally:
+        server.shutdown()
+        server.server_close()

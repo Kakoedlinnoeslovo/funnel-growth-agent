@@ -193,6 +193,49 @@ def apply(
 
 
 @app.command()
+def deploy(
+    variant: str | None = typer.Argument(
+        None, help="Variant folder to ship, e.g. v8_a5. Default: the latest applied variant."
+    ),
+    no_wait: bool = typer.Option(
+        False, "--no-wait", help="Stop once the pull request is open; do not follow the merge."
+    ),
+) -> None:
+    """Open the pull request that ships an applied variant, then follow it into production.
+
+    Builds a branch off origin/main in a throwaway worktree with only funnels/<variant> and its
+    two site.yaml lines, validates, pushes and opens the PR with `gh`. Merging is a human click
+    on GitHub; the command waits for it and then for Vercel's production deployment."""
+    from .deploy import deploy_variant
+
+    settings = _settings()
+    if variant is None:
+        applied = latest_applied(settings)
+        if applied is None or not applied.variant:
+            typer.echo("No applied variant to deploy. Run apply first.", err=True)
+            raise typer.Exit(code=1)
+        variant = applied.variant
+
+    def echo(kind: str, data: dict) -> None:
+        if kind == "deploy_stage":
+            typer.echo(f"• {data['stage']}: {data['message']}", err=True)
+
+    try:
+        result = deploy_variant(settings, variant, on_data=echo, wait_for_merge=not no_wait)
+    except Exception as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    lines = [f"Pull request: {result.pr_url}"]
+    if result.preview_url:
+        lines.append(f"Preview: {result.preview_url}")
+    if result.prod_url:
+        lines.append(f"Production: {result.prod_url}")
+    elif no_wait:
+        lines.append("Merge it on GitHub to ship; Vercel deploys main to production.")
+    typer.echo("\n".join(lines))
+
+
+@app.command()
 def show(
     run_id: str = typer.Argument(...),
     open_page: bool = typer.Option(False, "--open"),

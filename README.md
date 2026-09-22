@@ -16,9 +16,11 @@ uv run funnel-growth demo --live --open
 ```
 
 One command, everything in the browser. The console opens with the live landing on the left
-and the agent on the right. Press **R** to run a real proposal, **A** to apply it.
+and the agent on the right. Press **R** to run a real proposal, **A** to apply it, **D** to
+open the pull request that ships it.
 
-Keys: `R` run · `A` apply · `F` fullscreen. `?autostart=1&autoapply=1` runs both unattended.
+Keys: `R` run · `A` apply · `D` deploy · `F` fullscreen. `?autostart=1&autoapply=1` runs the
+first two unattended; add `&autodeploy=1` for the third.
 
 Needs the lab's dev server up for the left pane:
 
@@ -78,6 +80,7 @@ Edit `.env`. Relative paths resolve against the directory you run from.
 | `MIN_LANDING_PEOPLE` | `100` | Below this, metrics count as insufficient data |
 | `MIN_CREATIVE_SPEND` / `MIN_CREATIVE_CLICKS` | `5` / `10` | Ranking thresholds |
 | `FUNNEL_GROWTH_DATA_DIR` | `./data` | Run memory and every cache |
+| `PROD_LANDING_BASE` | — | Public base for deployed variants, e.g. `https://www.recraft.ai/pm`; unset prints the Vercel host |
 
 ## Commands
 
@@ -85,6 +88,7 @@ Edit `.env`. Relative paths resolve against the directory you run from.
 uv run funnel-growth status                      # base version, variants, latest run
 uv run funnel-growth propose                     # → a run id like 2026-09-20T2328-v8-001
 uv run funnel-growth apply <run_id>              # publish the variant into the lab
+uv run funnel-growth deploy [<variant>]          # open the PR that ships it to production
 uv run funnel-growth show <run_id> --open        # one page: evidence, diffs, tiles, scores
                                                  #   (or `apply <run_id> --page` to do both)
 uv run funnel-growth evaluate <run_id>           # once the variant has traffic
@@ -127,6 +131,26 @@ Gemini cache.
 Prints `http://localhost:5173/pm/<variant>` on success — restart `npm run dev` to see a new
 version folder. A run is applied once; propose again for another variant.
 
+**`deploy`** ships an applied variant. Nothing the agent does touches git: `apply` only writes
+into the local lab checkout, and production is whatever the lab repo's `main` branch holds
+(Vercel deploys every merge to `main`; Recraft proxies `/pm` to it). So publishing means
+getting `funnels/<variant>` onto `main`:
+
+- Fetches `origin` and builds a branch `agent/<variant>` off `origin/main` in a throwaway git
+  worktree, so a stale or dirty local checkout never leaks into the commit.
+- Copies `funnels/<variant>` (without its git-ignored `content/`) and adds exactly two lines
+  to `site.yaml`: the variant under `published_versions` and its description under
+  `versions`. `default_version` is never written, so nothing is served differently until
+  traffic is pointed at the new URL.
+- Runs `npm run funnel:validate` on the branch, commits, pushes and opens the pull request
+  with `gh`, then waits for Vercel's preview build and prints its URL.
+- **Merging stays a human click on GitHub.** The command waits for it (an hour by default),
+  then follows the production deployment through GitHub's deployments API and prints the
+  live URL. `--no-wait` stops once the pull request is open.
+
+Needs `gh auth login` with push access to the lab repo. Set `PROD_LANDING_BASE` (for example
+`https://www.recraft.ai/pm`) to print the public URL instead of the Vercel deployment host.
+
 **`evaluate`** compares the variant's landing→CTA rate against the baseline stored at propose
 time, once it appears in a new report. Directional only, written back to memory as a learning.
 
@@ -142,9 +166,15 @@ diff and tile briefs. **A** animates the safety checklist, each tile arrives wit
 candidates, the judge's five scores fill in, the pick turns lime, and the iframe switches to
 `/pm/<variant>`.
 
-Preflight prints at start: API keys present, dev server reachable, base landing on disk.
-Apply is always available in live mode, and the run is written to `data/demo/` as it goes so
-it can be replayed later — see Advanced.
+**D** runs `deploy`: the checklist ticks through branch, validate, commit, push and the pull
+request, shows the Vercel preview URL, then waits on "a person merges the pull request".
+Merge it from any browser tab and the console follows Vercel's production build and shows the
+live URL. The console never merges by itself.
+
+Preflight prints at start: API keys present, dev server reachable, base landing on disk, and
+whether `gh` is signed in (Deploy is greyed out otherwise). Apply is always available in live
+mode, and the run is written to `data/demo/` as it goes so it can be replayed later — see
+Advanced.
 
 ## Advanced
 

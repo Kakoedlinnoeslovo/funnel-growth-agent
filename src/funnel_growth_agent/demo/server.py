@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import queue
+import sys
 import threading
 import time
 import urllib.request
@@ -31,11 +32,21 @@ from .events import (
     referenced_paths,
     run_id_of,
 )
-from .replay import schedule, split_phases
+from .replay import deploy_events, schedule, split_phases
 
 PREVIEW_BASE = "http://localhost:5173/pm"
 Mode = Literal["replay", "live"]
-Status = Literal["idle", "proposing", "proposed", "declined", "applying", "live", "failed"]
+Status = Literal[
+    "idle",
+    "proposing",
+    "proposed",
+    "declined",
+    "applying",
+    "live",
+    "deploying",
+    "deployed",
+    "failed",
+]
 
 
 class Broadcaster:
@@ -74,6 +85,9 @@ class ConsoleState:
     preflight: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
     can_apply: bool = False
+    can_deploy: bool = False
+    prod_url: str | None = None
+    pr_url: str | None = None
 
 
 def frame(event_name: str, payload: dict[str, Any], event_id: int | None = None) -> bytes:
@@ -83,6 +97,24 @@ def frame(event_name: str, payload: dict[str, Any], event_id: int | None = None)
     lines.append(f"event: {event_name}")
     lines.append("data: " + json.dumps(payload, default=str))
     return ("\n".join(lines) + "\n\n").encode("utf-8")
+
+
+def gh_ready(lab: Path, timeout: float = 5.0) -> str | None:
+    """The GitHub login `gh` will push and open pull requests as, or None."""
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["gh", "api", "user", "--jq", ".login"],
+            cwd=lab if lab.is_dir() else None,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return completed.stdout.strip() or None if completed.returncode == 0 else None
 
 
 def dev_server_up(url: str, timeout: float = 1.5) -> bool:
@@ -96,6 +128,13 @@ def dev_server_up(url: str, timeout: float = 1.5) -> bool:
 class ConsoleServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        """A browser tab closing or reloading resets its socket; that is not an error."""
+        error = sys.exc_info()[1]
+        if isinstance(error, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
     def __init__(
         self,
@@ -129,11 +168,19 @@ class ConsoleServer(ThreadingHTTPServer):
             speed=speed,
         )
         self.state.can_apply = mode == "live" or any(e.phase == "apply" for e in self.recorded)
+        self.gh_login = gh_ready(settings.pricing_lab_dir) if mode == "live" else None
+        self.state.can_deploy = bool(self.gh_login) or bool(deploy_events(self.recorded))
         self._assets: dict[str, Path] = {}
         self._assets_len = -1
         self.state.preflight = self.preflight()
 
     # ---------------------------------------------------------------- state
+
+    def refresh_preflight(self) -> None:
+        """Preflight is cheap and the lab dev server is often started after the console,
+        so re-run it whenever the page (re)loads while nothing is running."""
+        if self.state.status == "idle":
+            self.state.preflight = self.preflight()
 
     def state_dict(self) -> dict[str, Any]:
         s = self.state
@@ -147,6 +194,9 @@ class ConsoleServer(ThreadingHTTPServer):
             "recording": s.recording,
             "speed": s.speed,
             "canApply": s.can_apply,
+            "canDeploy": s.can_deploy,
+            "prodUrl": s.prod_url,
+            "prUrl": s.pr_url,
             "reloadDelayMs": 0 if s.mode == "replay" else 1500,
             "preflight": s.preflight,
             "error": s.error,
@@ -176,6 +226,16 @@ class ConsoleServer(ThreadingHTTPServer):
         elif event.kind == "apply_done":
             self._set_status("live", variant=event.data.get("variant"))
         elif event.kind == "apply_failed":
+            self._set_status("failed", error=str(event.data.get("error")))
+        elif event.kind == "deploy_started":
+            self._set_status("deploying")
+        elif event.kind == "deploy_done":
+            self._set_status(
+                "deployed",
+                prod_url=event.data.get("prodUrl"),
+                pr_url=event.data.get("prUrl"),
+            )
+        elif event.kind == "deploy_failed":
             self._set_status("failed", error=str(event.data.get("error")))
 
     def buffer_snapshot(self) -> list[Event]:
@@ -235,6 +295,14 @@ class ConsoleServer(ThreadingHTTPServer):
             checks.append(
                 {"ok": s.landing_path.is_file(), "label": f"base landing {s.landing_path}"}
             )
+            checks.append(
+                {
+                    "ok": bool(self.gh_login),
+                    "label": f"gh signed in as {self.gh_login} (deploy opens the pull request)"
+                    if self.gh_login
+                    else "gh not signed in: deploy is off (`gh auth login`)",
+                }
+            )
         return checks
 
     # -------------------------------------------------------------- actions
@@ -265,6 +333,20 @@ class ConsoleServer(ThreadingHTTPServer):
             threading.Thread(target=self._live_apply, daemon=True).start()
         return 202, {"ok": True}
 
+    def deploy(self) -> tuple[int, dict[str, Any]]:
+        if self.state.status != "live":
+            return 409, {"error": f"cannot deploy while {self.state.status}"}
+        if not self.state.can_deploy:
+            return 409, {"error": "deploy is off: gh is not signed in"}
+        self._set_status("deploying")
+        if self.state.mode == "replay":
+            threading.Thread(
+                target=self._replay, args=(deploy_events(self.recorded), "deployed"), daemon=True
+            ).start()
+        else:
+            threading.Thread(target=self._live_deploy, daemon=True).start()
+        return 202, {"ok": True}
+
     def reset(self) -> tuple[int, dict[str, Any]]:
         if self.state.mode != "replay":
             return 409, {"error": "reset is for replay mode"}
@@ -276,6 +358,8 @@ class ConsoleServer(ThreadingHTTPServer):
             self.state.run_id = None
             self.state.variant = None
             self.state.error = None
+            self.state.prod_url = None
+            self.state.pr_url = None
         self._set_status("idle")
         return 200, {"ok": True}
 
@@ -285,7 +369,7 @@ class ConsoleServer(ThreadingHTTPServer):
             if stop.wait(delay):
                 return
             self.publish_event(event)
-        if self.state.status in {"proposing", "applying"}:
+        if self.state.status in {"proposing", "applying", "deploying"}:
             self._set_status(final)
 
     def _new_recorder(self) -> Recorder:
@@ -323,6 +407,21 @@ class ConsoleServer(ThreadingHTTPServer):
             if self.state.status != "failed":
                 self._set_status("failed", error=str(error))
 
+    def _live_deploy(self) -> None:
+        from ..deploy import deploy_variant
+
+        recorder = self.recorder or self._new_recorder()
+        recorder.phase = "deploy"
+        variant = self.state.variant
+        if not variant:
+            self._set_status("failed", error="no variant to deploy")
+            return
+        try:
+            deploy_variant(self.settings, variant, on_data=recorder)
+        except Exception as error:  # noqa: BLE001 - reported via deploy_failed
+            if self.state.status != "failed":
+                self._set_status("failed", error=str(error))
+
 
 class Handler(BaseHTTPRequestHandler):
     server: ConsoleServer  # type: ignore[assignment]
@@ -349,6 +448,7 @@ class Handler(BaseHTTPRequestHandler):
             page = resources.files("funnel_growth_agent.demo").joinpath("console.html")
             self._send(200, page.read_bytes(), "text/html; charset=utf-8")
         elif path == "/state":
+            self.server.refresh_preflight()
             self._json(200, self.server.state_dict())
         elif path == "/events":
             self._sse()
@@ -362,6 +462,7 @@ class Handler(BaseHTTPRequestHandler):
         actions = {
             "/start": self.server.start,
             "/apply": self.server.apply,
+            "/deploy": self.server.deploy,
             "/reset": self.server.reset,
         }
         action = actions.get(path)

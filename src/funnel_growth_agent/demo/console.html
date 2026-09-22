@@ -121,6 +121,7 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     <button class="btn quiet" id="reset" title="Rehearse again">reset</button>
     <button class="btn" id="run">Run agent<kbd>R</kbd></button>
     <button class="btn lime" id="apply" disabled>Apply<kbd>A</kbd></button>
+    <button class="btn" id="deploy" disabled title="Open the pull request that ships this variant">Deploy<kbd>D</kbd></button>
   </div>
   <div id="feed"><div id="empty">Press <b>R</b> to run the agent.</div></div>
   <div id="now"><span class="dot"></span><span class="what"></span><span class="secs"></span></div>
@@ -129,7 +130,7 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
 (() => {
   const $ = (s) => document.querySelector(s);
   const feed = $('#feed'), frame = $('#frame'), urlbar = $('#urlbar');
-  const st = { mode: 'replay', status: 'idle', base: '', previewBase: '', variant: null, reloadDelayMs: 0, canApply: false };
+  const st = { mode: 'replay', status: 'idle', base: '', previewBase: '', variant: null, reloadDelayMs: 0, canApply: false, canDeploy: false };
   const ctx = { landing: null, analyses: {}, ranked: {} };
   const cards = {}, tools = {}, tiles = {}, shellTimer = {};
   let proposalOutput = null;
@@ -143,6 +144,7 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     get_media_sources: 'Listing ready clips',
     research_landing: 'Researching a competitor landing',
     get_showcase_style: 'Reading the showcase style',
+    get_visual_landscape: 'Mapping the visual landscape',
   };
   // Tools whose result renders a card. The shell is drawn when the call starts.
   const TOOL_CARD = {
@@ -152,6 +154,7 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     get_previous_runs: ['memory', 'Memory'],
     research_landing: ['research', 'Competitor research'],
     get_showcase_style: ['style', 'House style read'],
+    get_visual_landscape: ['landscape', 'Visual landscape'],
   };
   const toolLabel = (d) => (d.name === 'research_landing' && d.input && d.input.url)
     ? 'Researching ' + String(d.input.url).replace(/^https?:\/\//, '').replace(/\/$/, '')
@@ -262,20 +265,24 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     tile_started: (d) => `Drawing options for ${d.group}`,
     tile_candidate: () => null,
     tile_judged: () => 'Picking the best option',
+    deploy_started: () => 'Checking the lab checkout and GitHub',
+    deploy_stage: (d) => DEPLOY_DOING[d.stage] || d.stage,
   };
 
   // ---------- state
   function applyState(s) {
-    Object.assign(st, { mode: s.mode, status: s.status, base: s.baseVersion, previewBase: s.previewBase, variant: s.variant, reloadDelayMs: s.reloadDelayMs, canApply: s.canApply });
+    Object.assign(st, { mode: s.mode, status: s.status, base: s.baseVersion, previewBase: s.previewBase, variant: s.variant, reloadDelayMs: s.reloadDelayMs, canApply: s.canApply, canDeploy: s.canDeploy });
     $('#meta').textContent = `base ${s.baseVersion} · ${s.mode}${s.recording ? ' · ' + s.recording : ''}`;
     $('#run').disabled = s.status !== 'idle';
     $('#apply').disabled = !(s.status === 'proposed' && s.canApply);
+    $('#deploy').disabled = !(s.status === 'live' && s.canDeploy);
+    $('#deploy').classList.toggle('lime', s.status === 'live' && s.canDeploy);
     $('#reset').style.display = s.mode === 'replay' ? '' : 'none';
-    if (s.status === 'proposing' || s.status === 'applying') armNow();
+    if (s.status === 'proposing' || s.status === 'applying' || s.status === 'deploying') armNow();
     else { restNow(); dropThinking(); }
     if (frame.src === 'about:blank' && s.previewBase) showPage(s.baseVersion, false);
     if (s.status === 'live' && s.variant && !urlbar.classList.contains('is-live')) showPage(s.variant, true);
-    if (s.error && !cards.error) card('error', 'Error').appendChild(el('div', 'pre', s.error));
+    if (s.error && !cards.error && !cards.failed) card('error', 'Error').appendChild(el('div', 'pre', s.error));
     if (s.status === 'idle' && s.preflight && !cards.preflight) {
       const b = card('preflight', 'Preflight'); const ul = el('ul', 'preflight');
       s.preflight.forEach(p => ul.appendChild(el('li', p.ok ? 'ok' : '', (p.ok ? '✓ ' : '✗ ') + p.label)));
@@ -322,6 +329,7 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
       case 'get_previous_runs': return memoryCard(r.runs || []);
       case 'research_landing': return researchCard(r);
       case 'get_showcase_style': return styleCard(r);
+      case 'get_visual_landscape': return landscapeCard(r);
     }
   }
   function evidenceCard(b) {
@@ -381,6 +389,21 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
   function styleCard(s) {
     const body = fill('style', 'House style read'); if (!body) return;
     (s.groups || []).slice(0, 4).forEach(g => body.appendChild(el('div', 'muted', `${g.label}: ${g.family || (g.tiles && g.tiles[0] && g.tiles[0].medium) || ''}`)));
+  }
+
+  function landscapeCard(l) {
+    const body = fill('landscape', 'Visual landscape'); if (!body) return;
+    const fams = (l.families || []).filter(f => f.adShare > 0 || f.landingTiles > 0 || (f.competitorUrls || []).length);
+    fams.sort((a, b) => b.adShare - a.adShare).slice(0, 5).forEach(f => {
+      const tested = (f.tested || [])[0];
+      const bits = [`${pct(f.adShare)} of ad spend`, `${f.landingTiles} of our tiles`];
+      if ((f.competitorUrls || []).length) bits.push(`${f.competitorUrls.length} competitor${f.competitorUrls.length === 1 ? '' : 's'}`);
+      bits.push(tested ? `tested: ${tested.result || tested.status}` : 'untested');
+      body.appendChild(el('div', 'muted', `${f.family}: ${bits.join(' · ')}`));
+    });
+    if ((l.adsValidateLandingLacks || []).length) body.appendChild(el('div', null, `Ads validate, landing lacks: ${l.adsValidateLandingLacks.join(', ')}`));
+    if ((l.competitorsUseWeLack || []).length) body.appendChild(el('div', null, `Competitors show, we do not: ${l.competitorsUseWeLack.join(', ')}`));
+    if ((l.blockedWithoutNewEvidence || []).length) body.appendChild(el('div', 'muted', `Blocked without new evidence: ${l.blockedWithoutNewEvidence.join(', ')}`));
   }
 
   // ---------- proposal
@@ -509,7 +532,51 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     body.appendChild(el('div', 'muted', 'The base version and default_version are untouched. Traffic decides next.'));
     setTimeout(() => showPage(d.variant, true), st.reloadDelayMs || 0);
   }
-  function onFailed(d) { card('failed', 'Failed').appendChild(el('div', 'pre', d.error || 'unknown error')); }
+  function onFailed(d) { if (cards.error) return; card('failed', 'Failed').appendChild(el('div', 'pre', d.error || 'unknown error')); }
+
+  // ---------- deploy phase: open the pull request, then follow the merge and the build.
+  // deploy.py emits a stage AFTER it finishes; `preview`, `merge` and `build` repeat while waiting.
+  const DEPLOY_STAGES = ['check', 'branch', 'validate', 'commit', 'push', 'pr', 'preview', 'merge', 'build'];
+  const DEPLOY_LABEL = {
+    check: 'Check the lab checkout and GitHub', branch: 'Branch from origin/main with only this variant',
+    validate: 'Validate the funnel on the branch', commit: 'Commit', push: 'Push', pr: 'Open the pull request',
+    preview: 'Vercel builds a preview', merge: 'A person merges the pull request', build: 'Vercel deploys production',
+  };
+  const DEPLOY_DOING = {
+    check: 'Branching from origin/main', branch: 'Validating the funnel', validate: 'Committing',
+    commit: 'Pushing the branch', push: 'Opening the pull request', pr: 'Waiting for the Vercel preview',
+    preview: 'Waiting for the pull request to be merged', merge: 'Waiting for Vercel to deploy production', build: 'Live',
+  };
+  const DEPLOY_WAITS = { preview: /^waiting|^no Vercel/, merge: /^waiting/, build: /^Vercel is building/ };
+  function linkify(node, text) {
+    // "prefix: https://…" becomes text plus a link; anything else stays plain text.
+    const m = /^(.*?)(https?:\/\/\S+)$/.exec(text || '');
+    if (!m) { node.textContent = text || ''; return; }
+    node.textContent = m[1]; const a = el('a', null, m[2]); a.href = m[2]; a.target = '_blank'; node.appendChild(a);
+  }
+  function onDeployStarted(d) {
+    const body = card('deploy', `Deploy · ${d.variant}`);
+    const ul = el('ul', 'check');
+    DEPLOY_STAGES.forEach(s => { const li = el('li'); li.dataset.stage = s; li.appendChild(el('span', 'm', '○')); li.appendChild(el('span', null, DEPLOY_LABEL[s])); li.appendChild(el('span', 'msg', '')); ul.appendChild(li); });
+    body.appendChild(ul);
+    body.appendChild(el('div', 'muted', 'Merging stays a human click on GitHub. default_version is never written.'));
+  }
+  function onDeployStage(d) {
+    const ul = cards.deploy && cards.deploy.querySelector('.check'); if (!ul) return;
+    const idx = DEPLOY_STAGES.indexOf(d.stage);
+    ul.querySelectorAll('li').forEach((li, i) => { if (i < idx && !li.classList.contains('done')) { li.classList.add('done'); li.querySelector('.m').textContent = '✓'; } });
+    const li = ul.querySelector(`li[data-stage="${d.stage}"]`); if (!li) return;
+    linkify(li.querySelector('.msg'), d.message);
+    const waiting = DEPLOY_WAITS[d.stage] && DEPLOY_WAITS[d.stage].test(d.message || '');
+    if (!waiting) { li.classList.add('done'); li.querySelector('.m').textContent = '✓'; }
+  }
+  function onDeployDone(d) {
+    const body = card('prod', d.merged ? `In production · ${d.variant}` : `Pull request open · ${d.variant}`, { cls: 'livecard' });
+    const row = (label, url) => { if (!url) return; const r = el('div'); r.appendChild(el('span', 'muted', label + ' ')); const a = el('a', null, url); a.href = url; a.target = '_blank'; r.appendChild(a); body.appendChild(r); };
+    row('production', d.prodUrl); row('preview', d.previewUrl); row('pull request', d.prUrl);
+    body.appendChild(el('div', 'muted', d.merged ? 'Same URL scheme as the base: only traffic decides what people see.' : 'Merge it on GitHub to ship; the console keeps following.'));
+    scrollDown();
+  }
 
   // ---------- wiring
   const HANDLERS = {
@@ -517,16 +584,19 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     proposal: onProposal, proposal_saved: () => {}, propose_failed: onFailed,
     apply_started: onApplyStarted, apply_stage: onApplyStage, tile_started: onTileStarted, tile_candidate: onTileCandidate,
     tile_judged: onTileJudged, apply_done: onApplyDone, apply_failed: onFailed,
+    deploy_started: onDeployStarted, deploy_stage: onDeployStage, deploy_done: onDeployDone, deploy_failed: onFailed,
   };
   const post = (path) => fetch(path, { method: 'POST' }).then(r => r.json()).catch(() => ({}));
   $('#run').addEventListener('click', () => post('/start'));
   $('#apply').addEventListener('click', () => post('/apply'));
+  $('#deploy').addEventListener('click', () => post('/deploy'));
   $('#reset').addEventListener('click', () => post('/reset').then(() => location.reload()));
   document.addEventListener('keydown', (e) => {
     if (e.target && /input|textarea/i.test(e.target.tagName)) return;
     const k = e.key.toLowerCase();
     if (k === 'r' && !$('#run').disabled) post('/start');
     else if (k === 'a' && !$('#apply').disabled) post('/apply');
+    else if (k === 'd' && !$('#deploy').disabled) post('/deploy');
     else if (k === 'f') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
   });
   const params = new URLSearchParams(location.search);
@@ -536,6 +606,7 @@ h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute
     es.addEventListener('state', (e) => {
       const next = JSON.parse(e.data); applyState(next);
       if (params.get('autoapply') === '1' && next.status === 'proposed' && next.canApply) post('/apply');
+      if (params.get('autodeploy') === '1' && next.status === 'live' && next.canDeploy) post('/deploy');
     });
     // /events replays the whole buffer on every (re)connect, so drop anything already
     // handled: researchCard and the tile handlers append unconditionally and would double up.

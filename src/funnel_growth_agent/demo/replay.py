@@ -21,6 +21,10 @@ PACING: dict[str, float] = {
     "tile_judged": 1.4,
     "apply_done": 0.8,
     "apply_failed": 0.3,
+    "deploy_started": 0.4,
+    "deploy_stage": 0.7,
+    "deploy_done": 0.8,
+    "deploy_failed": 0.3,
 }
 DEFAULT_DELAY = 0.4
 
@@ -29,6 +33,10 @@ def split_phases(events: list[Event]) -> tuple[list[Event], list[Event]]:
     propose = [e for e in events if e.phase == "propose"]
     apply = [e for e in events if e.phase == "apply"]
     return propose, apply
+
+
+def deploy_events(events: list[Event]) -> list[Event]:
+    return [e for e in events if e.phase == "deploy"]
 
 
 def schedule(
