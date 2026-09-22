@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -37,9 +37,17 @@ class Settings:
     glam_api_key: str | None = None
     browse_bin: Path | None = None
     tile_variants: int = 3
-    analysis_schema_version: int = 3
+    analysis_schema_version: int = 4
     prod_landing_base: str | None = None
     now: str | None = None
+    vercel_bin: str = "vercel"
+    vercel_project_id: str | None = None
+    vercel_org_id: str | None = None
+    github_publish_repo: str | None = None
+    github_publish_branch: str = "main"
+    github_public_origin: str | None = None
+    github_build_environment: dict[str, str] = field(default_factory=dict)
+    creative_paths: dict[str, dict[str, str]] = field(default_factory=dict)
 
     @property
     def media_cache_dir(self) -> Path:
@@ -112,9 +120,7 @@ def read_default_version(site_path: Path) -> str:
 
 def load_settings() -> Settings:
     load_dotenv(REPO_DIR / ".env")
-    pricing_lab_dir = _path(
-        os.getenv("PRICING_LAB_DIR"), REPO_DIR.parent / "recraft-pricing-performance"
-    )
+    pricing_lab_dir = _path(os.getenv("PRICING_LAB_DIR"), REPO_DIR.parent / "recraft-pricing-lab")
     # BASE_VERSION is an explicit override; otherwise follow whatever `/` currently serves.
     base_version = os.getenv("BASE_VERSION") or read_default_version(
         pricing_lab_dir / "funnels" / "site.yaml"
@@ -138,4 +144,15 @@ def load_settings() -> Settings:
         if os.getenv("GSTACK_BROWSE")
         else None,
         prod_landing_base=os.getenv("PROD_LANDING_BASE") or None,
+        vercel_bin=os.getenv("VERCEL_BIN", "vercel"),
+        vercel_project_id=os.getenv("VERCEL_PROJECT_ID") or None,
+        vercel_org_id=os.getenv("VERCEL_ORG_ID") or None,
+        github_publish_repo=os.getenv("GITHUB_PUBLISH_REPO") or None,
+        github_publish_branch=os.getenv("GITHUB_PUBLISH_BRANCH", "main"),
+        github_public_origin=os.getenv("GITHUB_PUBLIC_ORIGIN") or None,
+        github_build_environment={
+            key.removeprefix("GITHUB_PUBLISH_"): value
+            for key, value in os.environ.items()
+            if key.startswith("GITHUB_PUBLISH_VITE_")
+        },
     )

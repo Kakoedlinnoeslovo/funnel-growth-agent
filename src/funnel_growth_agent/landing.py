@@ -9,6 +9,7 @@ from typing import Any
 from ruamel.yaml import YAML
 
 from .config import Settings
+from .models import MOVABLE_COMPONENTS, OMITTABLE_COMPONENTS
 
 _yaml = YAML(typ="safe")
 
@@ -22,6 +23,31 @@ TEXT_KEYS = {
     "component",
     "pageTitle",
 }
+
+HERO_COMPONENTS = {"kittl-hero", "hero-carousel", "quiz-hero"}
+
+
+def landing_image_targets(
+    sections: list[dict[str, Any]],
+) -> dict[str, tuple[str | None, list[tuple[Any, Any]]]]:
+    """Named editable image slots, shared by analysis, generation and patching."""
+    groups = {}
+    for section, sid in zip(sections, resolve_section_ids(sections)):
+        component = section.get("component")
+        if component == "showcase":
+            for group in section.get("groups") or []:
+                images = group.get("images") or []
+                groups[str(group["label"])] = (
+                    group.get("caption"),
+                    [(images, i) for i in range(len(images))],
+                )
+        elif component in {"hero-carousel", "quiz-hero"}:
+            items = section.get("slides" if component == "hero-carousel" else "choices") or []
+            groups[sid] = (
+                f"{component} imagery",
+                [(item, "image") for item in items if "image" in item],
+            )
+    return groups
 
 
 def landing_hash(path: Path) -> str:
@@ -49,6 +75,19 @@ def resolve_section_ids(sections: list[dict[str, Any]]) -> list[str]:
 
 def _strip_section(section: dict[str, Any], section_id: str) -> dict[str, Any]:
     out: dict[str, Any] = {"id": section_id, "component": section.get("component")}
+    out["canReorder"] = section.get("component") in MOVABLE_COMPONENTS
+    out["canOmit"] = section.get("component") in OMITTABLE_COMPONENTS
+    if section.get("component") == "hero-carousel":
+        slides = section.get("slides") or []
+        out["slides"] = slides
+        if slides:
+            out.update(
+                {
+                    key: slides[0][key]
+                    for key in ("headline", "subhead", "ctaLabel")
+                    if key in slides[0]
+                }
+            )
     for key in ("headline", "subhead", "ctaLabel", "reassurance", "layout", "stickyCta"):
         if key in section:
             out[key] = section[key]
@@ -87,4 +126,8 @@ def get_current_landing(settings: Settings) -> dict[str, Any]:
         "footer": props.get("footer"),
         "mobile": props.get("mobile"),
         "sections": sections,
+        "imageGroups": [
+            {"label": label, "caption": caption, "imageCount": len(targets)}
+            for label, (caption, targets) in landing_image_targets(raw_sections).items()
+        ],
     }

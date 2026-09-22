@@ -35,6 +35,9 @@ packages = ["src/funnel_growth_agent"]
 "src/funnel_growth_agent/playbook.md" = "funnel_growth_agent/playbook.md"
 "src/funnel_growth_agent/youtube_catalog.json" = "funnel_growth_agent/youtube_catalog.json"
 "src/funnel_growth_agent/demo/console.html" = "funnel_growth_agent/demo/console.html"
+"src/funnel_growth_agent/demo/workflow.html" = "funnel_growth_agent/demo/workflow.html"
+"src/funnel_growth_agent/demo/workflow.js" = "funnel_growth_agent/demo/workflow.js"
+"src/funnel_growth_agent/demo/workflow.css" = "funnel_growth_agent/demo/workflow.css"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

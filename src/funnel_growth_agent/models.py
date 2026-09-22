@@ -577,18 +577,23 @@ class RankedCreative(BaseModel):
 
     creative_id: str = Field(alias="creativeId")
     ad_name: str = Field(default="", alias="adName")
+    adset_id: str | None = Field(default=None, alias="adsetId")
+    adset_name: str = Field(default="", alias="adsetName")
+    campaign_name: str = Field(default="", alias="campaignName")
+    leads: int | None = None
     title: str = ""
     body: str = ""
     link_url: str | None = Field(default=None, alias="linkUrl")
-    spend: float = 0
-    impressions: int = 0
-    clicks: int = 0
+    spend: float | None = 0
+    impressions: int | None = 0
+    clicks: int | None = 0
     ctr: float | None = None
     cpc: float | None = None
-    checkouts: int = 0
-    payments: int = 0
+    checkouts: int | None = 0
+    payments: int | None = 0
     image_path: str | None = Field(default=None, alias="imagePath")
     video_path: str | None = Field(default=None, alias="videoPath")
+    video_duration: float | None = Field(default=None, alias="videoDuration", ge=0)
     reason_selected: str = Field(alias="reasonSelected")
 
 

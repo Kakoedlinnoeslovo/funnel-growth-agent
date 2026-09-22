@@ -1,5 +1,83 @@
 # funnel-growth-agent
 
+## Creative → landing workflow
+
+```bash
+uv run funnel-growth demo --live --open
+```
+
+The live demo now starts with an explicit baseline and creative selection. Choose a version
+from `recraft-pricing-lab`, search the latest weekly report by creative/ad-set/campaign name,
+and select one ad, several ads, or a whole ad set. All reported creatives are selectable,
+including low-volume ads; observed metrics, missing assets and weak evidence are shown.
+A group produces **one shared landing**, combining its themes through a main message and
+supporting features. The creative review is advisory: different feature promises or destination
+URLs do not block generation. Previously blocked drafts can resume with **Generate this draft**.
+
+For demonstrations, drop your own creatives into **Upload your own creative**: JPEG, PNG or
+WebP images (up to 20 MiB), and MP4, MOV or WebM videos (up to 100 MiB). Uploads can be used
+alone, without a weekly report, or combined with report creatives. They have no measured
+performance data. FFmpeg/FFprobe validate each file and extract a video's first decoded frame
+as its image reference. Analysis distinguishes visible text from inferred CTA direction; a
+blank opening frame or absent CTA uses supported Recraft context without blocking generation.
+The original video remains available, and CTA wording is editable in the generated draft.
+Uploads persist in Git-ignored `data/uploads/`; selected assets are copied into each saved draft.
+Files are limited to 40 megapixels per frame and previews are scaled to at most 2048 pixels.
+The demo continues to generate Recraft pages using existing baselines, claims and destinations.
+
+Each draft saves its baseline, report snapshot, original ad assets, Gemini analysis, competitor
+and YouTube context, and revision history. Generate a page, compare it to the baseline at
+desktop/mobile widths, then refine it with instructions or quick copy/CTA edits. Each revision
+builds in an isolated pricing-lab snapshot. Failed operations retain prior previews and saved
+inputs for retry. Drafts survive server restarts in `data/drafts/` (Git-ignored).
+Model responses are validated and corrected automatically before they become proposals.
+Baseline edit constraints are checked before generating images. Retrying a rendering or build
+failure reuses the saved valid proposal and cached media; an invalid proposal is returned to
+the model with the failed changes to correct.
+
+**Publish public version** uses the configured GitHub auto-deployment or a separate Vercel
+deployment, verifies public access and the reviewed page, then registers the version in the
+local pricing lab. The default landing stays unchanged. **Create another version** refreshes the catalog and starts with empty
+selections; any published version can be the next baseline. Historical drafts and previews
+remain in the sidebar.
+
+Prerequisites: the existing API keys and media tools below, installed pricing-lab dependencies,
+and a local lab dev server for browsing baselines before generation. Set
+`PRICING_LAB_DIR=../recraft-pricing-lab` in an existing `.env` if it still uses the old checkout
+name. Preview generation does not require Vercel.
+
+To use an existing GitHub → Vercel integration, sign in with `gh auth login` and set
+`GITHUB_PUBLISH_REPO`, `GITHUB_PUBLISH_BRANCH`, and `GITHUB_PUBLIC_ORIGIN` (see `.env.example`).
+**Prepare publishing preview** copies the latest deployment branch into an isolated checkout,
+adds the saved version, gives its new paywall a distinct identity, registers its mobile layout
+in the lab's tests, and runs tests, lint and a production build. Review this refreshed preview,
+then **Publish public version** makes a normal fast-forward push containing only that version,
+its catalog/test registration, and public verification markers. The existing GitHub integration
+deploys it at `GITHUB_PUBLIC_ORIGIN/pm/<version>`. Existing versions and `default_version` are
+preserved. Upstream changes require another preview; deployment retries reuse the saved commit.
+The demo does not treat a sign-in-protected branch preview as a public page.
+Production previews use the repository's defaults, not the developer checkout's staging
+settings. If Vercel has public frontend overrides, mirror them as `GITHUB_PUBLISH_VITE_*`
+in this demo's environment. **Refresh publishing preview** can rebuild an already submitted
+commit for review and verification without changing its content or pushing a duplicate.
+
+Alternatively, install/sign in to the Vercel CLI and link the destination project with
+`vercel link` in the pricing lab, or set `VERCEL_PROJECT_ID` and `VERCEL_ORG_ID`. The project must
+allow unauthenticated preview deployments; protected deployments are reported as failures,
+not public successes. The publisher uses [Vercel's prebuilt deployment flow](https://vercel.com/docs/cli/deploy)
+and [Build Output API](https://vercel.com/docs/build-output-api/configuration), without `--prod`.
+No deployment occurs until Publish is clicked.
+
+Supported baselines include Kittl heroes, carousel heroes (including `main/v1`), quiz heroes,
+and variants derived from them. The fixed Brand Studio React page is listed for preview only
+because its copy/media do not live in editable landing sections. Existing funnel behavior,
+pricing, choice IDs and existing versions' analytics identities are preserved. Built local previews block
+tracking scripts, API connections and forms so reviewing a draft cannot send tracking events or checkout
+requests. The public build retains the lab's configured frontend environment.
+
+The read-only proposal CLI and recorded replay console below remain available. `R`/`A`
+keyboard controls apply to the replay console; live mode uses the workflow buttons.
+
 Proposes and applies landing-page experiments for the Recraft pricing lab.
 
 The agent reads the latest growth-loop report, the current landing page, the top-performing
@@ -15,22 +93,19 @@ and publishes. **Nothing is written to the pricing lab until `apply` runs.**
 uv run funnel-growth demo --live --open
 ```
 
-One command, everything in the browser. The console opens with the live landing on the left
-and the agent on the right. Press **R** to run a real proposal, **A** to apply it, **D** to
-open the pull request that ships it.
+One command opens the creative-to-landing workflow described above.
 
-Keys: `R` run · `A` apply · `D` deploy · `F` fullscreen. `?autostart=1&autoapply=1` runs the
-first two unattended; add `&autodeploy=1` for the third.
+The recorded console retains `R` run · `A` apply · `D` deploy · `F` fullscreen.
 
 Needs the lab's dev server up for the left pane:
 
 ```bash
-cd ../recraft-pricing-performance && npm run dev
+cd ../recraft-pricing-lab && npm run dev
 ```
 
-Nothing needs to be run first. Apply produces the hero clip and generates any showcase tiles
-itself, so **R** then **A** is the whole demo. Expect 1–3 minutes for propose and 1–2 for
-apply. The run is recorded as it goes, so it can be replayed later without touching a model.
+Generation produces the media and builds a complete preview. Expect several minutes for a
+first draft; cached assets speed up later revisions. The draft's activity and history are saved
+as work progresses.
 
 The CLI below does the same steps one at a time, which is what you want for real work rather
 than a demo.
@@ -50,7 +125,7 @@ for YouTube), and two sibling checkouts:
 all/
 ├── funnel-growth-agent/            # this repo
 ├── growth-loop/                    # reports + downloaded ad creatives
-└── recraft-pricing-performance/    # funnels/site.yaml and funnels/<version>/
+└── recraft-pricing-lab/            # funnels/site.yaml and funnels/<version>/
 ```
 
 The lab also needs `npm install`, because `apply` runs `npm run funnel:validate` there.
@@ -67,7 +142,7 @@ Edit `.env`. Relative paths resolve against the directory you run from.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `GROWTH_LOOP_DIR` | `../growth-loop` | Where reports and ad creatives are read from |
-| `PRICING_LAB_DIR` | `../recraft-pricing-performance` | Funnel YAML that `apply` writes into |
+| `PRICING_LAB_DIR` | `../recraft-pricing-lab` | Baselines and locally registered published variants |
 | `ANTHROPIC_API_KEY` | — | Required for `propose` |
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Model for the proposal loop |
 | `GEMINI_API_KEY` | — | Creative analysis, landing reads, tile generation and judging |
@@ -154,10 +229,10 @@ Needs `gh auth login` with push access to the lab repo. Set `PROD_LANDING_BASE` 
 **`evaluate`** compares the variant's landing→CTA rate against the baseline stored at propose
 time, once it appears in a new report. Directional only, written back to memory as a learning.
 
-## Demo console
+## Recorded console
 
 ```bash
-uv run funnel-growth demo --live --open
+uv run funnel-growth demo --open
 ```
 
 The landing on the left, the agent on the right. The right pane shows the tool trace, last
@@ -166,15 +241,13 @@ diff and tile briefs. **A** animates the safety checklist, each tile arrives wit
 candidates, the judge's five scores fill in, the pick turns lime, and the iframe switches to
 `/pm/<variant>`.
 
-**D** runs `deploy`: the checklist ticks through branch, validate, commit, push and the pull
-request, shows the Vercel preview URL, then waits on "a person merges the pull request".
-Merge it from any browser tab and the console follows Vercel's production build and shows the
-live URL. The console never merges by itself.
+**D** replays the deployment phase when the recording includes it. The separate
+`deploy` CLI opens a pull request, waits for a person to merge it, and verifies the
+production deployment; it never merges automatically.
 
-Preflight prints at start: API keys present, dev server reachable, base landing on disk, and
-whether `gh` is signed in (Deploy is greyed out otherwise). Apply is always available in live
-mode, and the run is written to `data/demo/` as it goes so it can be replayed later — see
-Advanced.
+Preflight prints at start: API keys present, dev server reachable, base landing on disk.
+Apply is available when the selected recording contains an apply phase. CLI runs can be
+recorded or synthesized into `data/demo/` for replay — see Advanced.
 
 ## Advanced
 

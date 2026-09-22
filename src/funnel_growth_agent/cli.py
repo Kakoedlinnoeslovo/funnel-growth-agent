@@ -363,7 +363,7 @@ def demo(
     recording: str | None = typer.Option(
         None, "--recording", help="Run id, file name or path. Default: the newest recording."
     ),
-    live: bool = typer.Option(False, "--live", help="Run propose and apply for real."),
+    live: bool = typer.Option(False, "--live", help="Open the creative-to-landing draft workflow."),
     port: int = typer.Option(8765, "--port"),
     speed: float = typer.Option(1.0, "--speed", help="Replay pacing multiplier."),
     open_browser: bool = typer.Option(False, "--open"),

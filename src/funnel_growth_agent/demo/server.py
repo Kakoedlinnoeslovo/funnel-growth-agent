@@ -17,10 +17,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from ..config import Settings
 from ..events import Event
+from ..workflow_uploads import UploadError
 from .events import (
     JsonlSink,
     Recorder,
@@ -173,6 +174,16 @@ class ConsoleServer(ThreadingHTTPServer):
         self._assets: dict[str, Path] = {}
         self._assets_len = -1
         self.state.preflight = self.preflight()
+        self.workflow = None
+        if mode == "live":
+            from ..workflow import Workflow
+
+            self.workflow = Workflow(settings, preview_base=preview_base)
+
+    def server_close(self) -> None:
+        if getattr(self, "workflow", None) is not None:
+            self.workflow.close()
+        super().server_close()
 
     # ---------------------------------------------------------------- state
 
@@ -445,8 +456,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib name
         path = urlsplit(self.path).path
         if path == "/":
-            page = resources.files("funnel_growth_agent.demo").joinpath("console.html")
+            name = "workflow.html" if self.server.state.mode == "live" else "console.html"
+            page = resources.files("funnel_growth_agent.demo").joinpath(name)
             self._send(200, page.read_bytes(), "text/html; charset=utf-8")
+        elif path in {"/workflow.js", "/workflow.css"}:
+            page = resources.files("funnel_growth_agent.demo").joinpath(path[1:])
+            content_type = "text/javascript" if path.endswith(".js") else "text/css"
+            self._send(200, page.read_bytes(), content_type + "; charset=utf-8")
+        elif path.startswith("/api/"):
+            self._workflow_api(path, "GET")
         elif path == "/state":
             self.server.refresh_preflight()
             self._json(200, self.server.state_dict())
@@ -459,6 +477,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - stdlib name
         path = urlsplit(self.path).path
+        origin = self.headers.get("Origin")
+        host = self.headers.get("Host", "")
+        if origin and origin != f"http://{host}":
+            self._json(403, {"error": "Cross-origin actions are not allowed"})
+            return
+        if path.startswith("/api/"):
+            self._workflow_api(path, "POST")
+            return
         actions = {
             "/start": self.server.start,
             "/apply": self.server.apply,
@@ -471,6 +497,90 @@ class Handler(BaseHTTPRequestHandler):
             return
         code, payload = action()
         self._json(code, payload)
+
+    def _workflow_api(self, path: str, method: str) -> None:
+        workflow = self.server.workflow
+        if workflow is None:
+            self._json(409, {"error": "Start the demo with --live to use the creative workflow"})
+            return
+        host = urlsplit("http://" + self.headers.get("Host", "")).hostname
+        if host not in {"localhost", "127.0.0.1", self.server.server_address[0]}:
+            self._json(403, {"error": "Untrusted host"})
+            return
+        try:
+            payload = {}
+            if method == "POST" and path == "/api/uploads":
+                if self.headers.get("Transfer-Encoding") or not self.headers.get("Content-Length"):
+                    raise UploadError("Upload requires a file size.", 411)
+                length = int(self.headers["Content-Length"])
+                filename = unquote(self.headers.get("X-File-Name", ""))
+                previous_timeout = self.connection.gettimeout()
+                self.connection.settimeout(30)
+                try:
+                    result = workflow.upload(self.rfile, filename=filename, length=length)
+                finally:
+                    self.connection.settimeout(previous_timeout)
+                self._json(201, result)
+                return
+            if method == "POST":
+                if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                    self._json(415, {"error": "Expected application/json"})
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                if length < 0 or length > 262144:
+                    self._json(413, {"error": "Request is too large"})
+                    return
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                if not isinstance(payload, dict):
+                    raise ValueError("Expected a JSON object")
+            if path == "/api/catalog" and method == "GET":
+                self._json(200, workflow.catalog())
+            elif path == "/api/drafts":
+                if method == "GET":
+                    self._json(200, {"drafts": workflow.list_drafts(), "busy": workflow.busy})
+                else:
+                    self._json(201, workflow.create(payload))
+            elif path.startswith("/api/drafts/"):
+                parts = path.removeprefix("/api/drafts/").split("/")
+                if len(parts) == 1 and method == "GET":
+                    self._json(200, workflow.present(parts[0]))
+                elif len(parts) == 3 and parts[1] == "preview" and method == "GET":
+                    draft = workflow.load(parts[0])
+                    number = int(parts[2])
+                    if (
+                        number < 1
+                        or number > len(draft["revisions"])
+                        or draft["revisions"][number - 1]["status"] != "ready"
+                    ):
+                        raise ValueError("Preview revision is unavailable")
+                    dist = workflow.path(parts[0]) / "revisions" / str(number) / "lab/dist"
+                    location = workflow.previews.url(dist, draft["variant"])
+                    self.send_response(302)
+                    self.send_header("Location", location)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                elif len(parts) == 2 and method == "POST":
+                    self._json(202, workflow.start_job(parts[0], parts[1], payload))
+                else:
+                    self._json(404, {"error": "Unknown draft action"})
+            elif path.startswith("/api/assets/") and method == "GET":
+                target = workflow.asset_paths.get(path.removeprefix("/api/assets/"))
+                if target is None or not target.is_file():
+                    self._json(404, {"error": "Asset unavailable"})
+                else:
+                    mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+                    self._send(200, target.read_bytes(), mime)
+            else:
+                self._json(404, {"error": "Not found"})
+        except UploadError as error:
+            self.close_connection = True
+            self._json(error.status, {"error": str(error)})
+        except KeyError:
+            self._json(404, {"error": "Draft not found"})
+        except (ValueError, FileNotFoundError) as error:
+            self._json(400, {"error": str(error)})
+        except Exception as error:
+            self._json(500, {"error": str(error)})
 
     def _asset(self, key: str) -> None:
         target = self.server.assets().get(key)
@@ -553,7 +663,12 @@ def serve(
     print(f"Demo console ({server.state.mode}): {url}")
     for check in server.state.preflight:
         print(f"  {'✓' if check['ok'] else '✗'} {check['label']}")
-    print("Press R to run the agent, A to apply, F for fullscreen. Ctrl-C stops the server.")
+    if live:
+        print(
+            "Select a baseline and creatives, generate a draft, refine it, then publish. Ctrl-C stops the server."
+        )
+    else:
+        print("Press R to run the agent, A to apply, F for fullscreen. Ctrl-C stops the server.")
     if open_browser:
         webbrowser.open(url)
     try:
