@@ -14,14 +14,17 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .config import Settings
 from .creatives import LAB_HOSTS
-from .models import CAMEL
+from .models import CAMEL, VisualFormat, normalize_visual_format
 
 DESKTOP = (1440, 900)
 PHONE = (390, 844)
+
+# Bump when READ_PROMPT or LandingPatternRead gains fields; older cache files are re-fetched.
+RESEARCH_SCHEMA_VERSION = 2
 
 READ_PROMPT = (
     "These are two screenshots of the first screen of {url}: desktop (1440 wide) then phone "
@@ -29,7 +32,13 @@ READ_PROMPT = (
     "heroSubhead, primaryCta, ctaAboveFold (boolean), heroMedia (one of video, image, none, "
     "interactive), firstScreenSections (list, top to bottom), proofElements (list), "
     "notablePatterns (list of short observations about layout, media and CTA placement), "
-    "phoneDifferences (list). Do not give CRO advice. Do not invent text that is not visible."
+    "phoneDifferences (list), imageryFormats (list drawn only from: ugc-selfie, ugc-candid, "
+    "testimonial, unboxing, before-after, screenshot, studio-product, lifestyle, editorial, "
+    "illustration, lettering, collage, other; one entry per distinct image or video visible on "
+    "the first screen), imageryStyle (list of short phrases describing how the first-screen "
+    'imagery is made, e.g. "phone-shot creator holding product", "flat 3D product renders", '
+    '"app screenshot in device frame"), peopleShown (boolean: real people visible on the first '
+    "screen). Do not give CRO advice. Do not invent text that is not visible."
 )
 
 
@@ -47,6 +56,30 @@ class LandingPatternRead(BaseModel):
     proof_elements: list[str] = Field(default_factory=list, alias="proofElements")
     notable_patterns: list[str] = Field(default_factory=list, alias="notablePatterns")
     phone_differences: list[str] = Field(default_factory=list, alias="phoneDifferences")
+    # Schema v2: what the first-screen imagery looks like, for the visual-landscape tool.
+    imagery_formats: list[VisualFormat] = Field(default_factory=list, alias="imageryFormats")
+    imagery_style: list[str] = Field(default_factory=list, alias="imageryStyle")
+    people_shown: bool | None = Field(default=None, alias="peopleShown")
+
+    @field_validator("imagery_style", mode="before")
+    @classmethod
+    def _lines_to_list(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [line.strip() for line in value.splitlines() if line.strip()]
+        return value
+
+    @field_validator("imagery_formats", mode="before")
+    @classmethod
+    def _formats(cls, value: Any) -> Any:
+        if value is None:
+            return []
+        items = value.splitlines() if isinstance(value, str) else list(value)
+        out: list[str] = []
+        for item in items:
+            fmt = normalize_visual_format(item)
+            if fmt is not None:
+                out.append(fmt)
+        return out
 
 
 class CachedResearch(BaseModel):
@@ -58,6 +91,7 @@ class CachedResearch(BaseModel):
     screenshots: list[str] = Field(default_factory=list)
     read: LandingPatternRead | None = None
     error: str | None = None
+    schema_version: int = Field(default=1, alias="schemaVersion")
 
 
 class Browser(Protocol):
@@ -136,7 +170,10 @@ class GeminiPatternReader:
         response = client.models.generate_content(
             model=self.settings.gemini_model,
             contents=parts,
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            ),
         )
         return LandingPatternRead.model_validate(json.loads(response.text or "{}"))
 
@@ -170,7 +207,7 @@ def research_landing(
     cache = settings.research_dir / f"{key}.json"
     if cache.is_file() and not refresh:
         cached = CachedResearch.model_validate_json(cache.read_text(encoding="utf-8"))
-        if cached.read is not None:
+        if cached.read is not None and cached.schema_version == RESEARCH_SCHEMA_VERSION:
             return cached
     browser = browser or GstackBrowser(find_browse_binary(settings))
     if not browser.available():
@@ -214,6 +251,7 @@ def research_landing(
         screenshots=[str(shot) for shot in shots],
         read=read,
         error=None,
+        schema_version=RESEARCH_SCHEMA_VERSION,
     )
     cache.write_text(record.model_dump_json(by_alias=True, indent=2), encoding="utf-8")
     return record

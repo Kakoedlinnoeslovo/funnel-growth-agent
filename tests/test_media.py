@@ -159,6 +159,78 @@ def test_score_candidates_recomputes_totals_and_vetoes_stray_text() -> None:
     assert chosen == 0 and all(s.total == 0 for s in scores)
 
 
+def test_score_candidates_weights_follow_the_family() -> None:
+    from funnel_growth_agent.media import JUDGE_WEIGHTS, JUDGE_WEIGHTS_BY_FAMILY, judge_family
+
+    for family, weights in JUDGE_WEIGHTS_BY_FAMILY.items():
+        assert abs(sum(weights.values()) - 1.0) < 1e-9, family
+        assert set(weights) == set(JUDGE_WEIGHTS)
+    row = {
+        "index": 1,
+        "houseStyle": 8,
+        "subjectClarity": 8,
+        "cleanliness": 4,
+        "cropSafety": 8,
+        "paletteAdherence": 2,
+    }
+    default_total = score_candidates([row], 1)[0][0].total
+    ugc_total = score_candidates([row], 1, "ugc")[0][0].total
+    assert ugc_total > default_total  # palette barely counts for a phone photo
+    assert score_candidates([{**row, "cleanliness": 3}, {**row, "index": 2}], 2, "ugc")[1] == 1
+    assert judge_family("ugc-selfie") == "ugc" and judge_family("lifestyle") == "editorial"
+    assert judge_family("device-screen") == "screen"
+    assert judge_family("flat-vector") == "default" and judge_family(None) == "default"
+
+
+def test_judge_prompt_default_rubric_is_unchanged_and_ugc_rubric_differs() -> None:
+    from funnel_growth_agent.media import JUDGE_PROMPT, JUDGE_RUBRIC
+
+    def render(family: str) -> str:
+        rubric = JUDGE_RUBRIC[family].format(palette="#C8F520, #111111")
+        return JUDGE_PROMPT.format(
+            ref_count=1, first_cand=2, last_cand=4, prompt="p", rubric=rubric, lettering="none"
+        )
+
+    default = render("default")
+    assert "- houseStyle: matches the rendering technique, saturation, lighting" in default
+    assert "- cleanliness: no stray letters, text, watermarks, logos, UI or rendering" in default
+    assert "- paletteAdherence: uses only #C8F520, #111111 with one dominant colour" in default
+    assert "Intended text: none. Count intended text as correct, not stray." in default
+    ugc = render("ugc")
+    assert "extra or fused fingers" in ugc and "real-world clutter is fine" in ugc
+    assert "#C8F520, #111111 leads through clothing" in ugc
+    assert "readable invented interface text" in render("screen")
+    assert set(JUDGE_RUBRIC) == {"default", "ugc", "editorial", "screen"}
+
+
+def test_generate_tile_passes_the_family_to_the_judge(settings) -> None:
+    judge = FakeJudge()
+    tools = fake_media_tools(judge=judge)
+    plan = _tile(
+        medium="ugc-candid",
+        brief="A woman in her twenties holding up the sticker sheet she just printed",
+        background=None,
+    )
+    result = generate_tile(
+        build_tile_spec(plan, settings, "v7"), settings, tools, lambda *_: None, variants=2
+    )
+    assert judge.calls[0]["family"] == "ugc"
+    assert result.judge is not None and result.judge.family == "ugc"
+    generate_tile(
+        build_tile_spec(_tile(), settings, "v7"), settings, tools, lambda *_: None, variants=2
+    )
+    assert judge.calls[1]["family"] == "default"
+    without = generate_tile(
+        build_tile_spec(plan, settings, "v7"),
+        settings,
+        fake_media_tools(judge=False),
+        lambda *_: None,
+        variants=1,
+        refresh=True,
+    )
+    assert without.judge is not None and without.judge.family == "ugc"
+
+
 def test_generate_tile_makes_candidates_judges_and_caches(settings) -> None:
     runner = FakeRunner()
     images = FakeImages()
@@ -188,6 +260,30 @@ def test_generate_tile_makes_candidates_judges_and_caches(settings) -> None:
     again = generate_tile(spec, settings, tools, emit, variants=3)
     assert again.cached and len(images.calls) == 1 and len(judge.calls) == 1
     assert again.judge is not None and again.judge.chosen == 1
+
+
+def test_generate_tile_uses_the_medium_axes_for_variants(settings) -> None:
+    images = FakeImages()
+    tools = fake_media_tools(images=images)
+    plan = _tile(
+        medium="ugc-selfie",
+        brief="A man in his thirties holding the poster he printed from his sketch",
+        background=None,
+    )
+    spec = build_tile_spec(plan, settings, "v7")
+    generate_tile(spec, settings, tools, lambda *_: None, variants=3)
+    prompts = images.calls[0]["prompts"]
+    assert "window" in prompts[1] and "overcast" in prompts[2]
+    assert "three-quarter view" not in prompts[1]
+    legacy = FakeImages()
+    generate_tile(
+        build_tile_spec(_tile(), settings, "v7"),
+        settings,
+        fake_media_tools(images=legacy),
+        lambda *_: None,
+        variants=2,
+    )
+    assert "three-quarter view" in legacy.calls[0]["prompts"][1]
 
 
 def test_generate_tile_judge_failure_falls_back_to_first_candidate(settings) -> None:

@@ -76,14 +76,19 @@ def render_tile_card(
     out = ["<div class='card'>"]
     if brief_first:
         pills = [esc(plan.medium or "prompt"), esc(plan.tile_model)]
+        family = result.judge.family if result.judge is not None else None
+        if family and family != "default":
+            pills.insert(1, esc(family))
         out.append(
             f"<h2>{esc(plan.group)} · slot {plan.slot} "
             + " ".join(f"<span class='pill'>{pill}</span>" for pill in pills)
             + "</h2>"
         )
     else:
+        family = result.judge.family if result.judge is not None else None
+        pill = f" <span class='pill'>{esc(family)}</span>" if family and family != "default" else ""
         out.append(
-            f"<h2>{esc(plan.group)} · slot {plan.slot} · "
+            f"<h2>{esc(plan.group)} · slot {plan.slot}{pill} · "
             f"<span class='muted'>{esc(spec.model_name)} · {esc(spec.stem)}</span></h2>"
         )
     if result.cached and not brief_first:

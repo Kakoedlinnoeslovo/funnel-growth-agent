@@ -17,6 +17,8 @@ def test_style_read_covers_every_group_with_reference_ids_and_caches(settings) -
         "tile:Vectors:2",
     ]
     assert style.groups[1].family == "Photos family"
+    assert style.groups[0].tiles[0].format == "illustration"
+    assert style.groups[1].tiles[0].format == "studio-product"
     assert len(reader.calls) == 2 and [p.name for p in reader.calls[0][2]] == [
         "vector-1.webp",
         "vector-2.webp",
@@ -35,6 +37,20 @@ def test_style_read_degrades_without_gemini_or_images(settings) -> None:
     (settings.pricing_lab_dir / "funnels" / "v7" / "assets" / "showcase" / "photo-1.webp").unlink()
     record = read_showcase_style(settings, reader=FakeStyleReader())
     assert "missing on disk" in (record.error or "")
+
+
+def test_style_cache_without_format_still_loads(settings) -> None:
+    import json
+
+    read_showcase_style(settings, reader=FakeStyleReader())
+    cache = style_cache_path(settings)
+    data = json.loads(cache.read_text(encoding="utf-8"))
+    for group in data["groups"]:
+        for tile in group["tiles"]:
+            del tile["format"]
+    cache.write_text(json.dumps(data), encoding="utf-8")
+    again = read_showcase_style(settings, reader=FakeStyleReader())
+    assert again.error is None and again.groups[0].tiles[0].format is None
 
 
 def test_tool_loop_exposes_get_showcase_style(settings) -> None:

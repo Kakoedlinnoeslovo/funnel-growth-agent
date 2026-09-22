@@ -276,6 +276,10 @@ def test_showcase_brief_rules() -> None:
         )
     with pytest.raises(ValidationError, match="takes no references"):
         ShowcaseImagePlan.model_validate({**BRIEF_TILE, "model": "nano_banana_2"})
+    assert ShowcaseImagePlan.model_validate({**BRIEF_TILE, "medium": "ugc-candid"}).medium
+    assert ShowcaseImagePlan.model_validate({**BRIEF_TILE, "medium": "device-screen"}).medium
+    with pytest.raises(ValidationError):
+        ShowcaseImagePlan.model_validate({**BRIEF_TILE, "medium": "ugc-screenshot"})
     with pytest.raises(ValidationError, match="double quotes"):
         ShowcaseImagePlan.model_validate(
             {**BRIEF_TILE, "medium": "lettering", "brief": "The word VECTOR in retro lettering"}

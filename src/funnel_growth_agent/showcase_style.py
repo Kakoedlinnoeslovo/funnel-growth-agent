@@ -17,7 +17,9 @@ from .models import CachedShowcaseStyle, GroupStyle, TileStyleRead
 STYLE_PROMPT = (
     'These are the {n} tiles of the "{label}" gallery ({caption}) on our landing page, in '
     "order. For each tile return subject (one phrase), medium (photo, flat vector, 3d, "
-    "lettering, illustration, mockup...), palette (2-3 hex colours, dominant first), "
+    "lettering, illustration, mockup...), format (exactly one of: ugc-selfie, ugc-candid, "
+    "testimonial, unboxing, before-after, screenshot, studio-product, lifestyle, editorial, "
+    "illustration, lettering, collage, other), palette (2-3 hex colours, dominant first), "
     "background (one phrase), composition (one sentence), hasText (boolean). Then family: one "
     'sentence describing what visually unites them. Return JSON only: {{"tiles":[...],'
     '"family":"..."}}. Do not give advice.'
@@ -49,7 +51,10 @@ class GeminiStyleReader:
         response = client.models.generate_content(
             model=self.settings.gemini_model,
             contents=parts,
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+            ),
         )
         data = json.loads(response.text or "{}")
         tiles = [TileStyleRead.model_validate(item) for item in data.get("tiles") or []]

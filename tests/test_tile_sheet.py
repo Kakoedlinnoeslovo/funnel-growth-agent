@@ -29,3 +29,33 @@ def test_sheet_shows_prompt_scores_chosen_and_fallback(settings) -> None:
     )
     text = render_sheet("run-2", [fallback], base_dir=path.parent)
     assert "judge fallback" in text
+
+
+def test_sheet_shows_the_judge_family_for_non_studio_tiles(settings) -> None:
+    plan = ShowcaseImagePlan.model_validate(
+        {
+            **BRIEF_TILE,
+            "medium": "ugc-candid",
+            "brief": "A woman in her twenties holding up the sticker sheet she just printed",
+            "background": None,
+        }
+    )
+    result = generate_tile(
+        build_tile_spec(plan, settings, "v7"),
+        settings,
+        fake_media_tools(),
+        lambda *_: None,
+        variants=1,
+    )
+    html = render_sheet("run-3", [result], base_dir=settings.media_cache_dir)
+    assert "<span class='pill'>ugc</span>" in html
+    studio = generate_tile(
+        build_tile_spec(ShowcaseImagePlan.model_validate(BRIEF_TILE), settings, "v7"),
+        settings,
+        fake_media_tools(),
+        lambda *_: None,
+        variants=1,
+    )
+    assert "<span class='pill'>default</span>" not in render_sheet(
+        "r", [studio], base_dir=settings.media_cache_dir
+    )
