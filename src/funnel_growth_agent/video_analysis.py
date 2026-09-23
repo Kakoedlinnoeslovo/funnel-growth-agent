@@ -66,6 +66,24 @@ def level_fields(payload: Any) -> dict:
     return data
 
 
+def brief_reason(error: Exception, limit: int = 160) -> str:
+    """One trimmed line of an exception's own message, for a limitation the user reads."""
+    if isinstance(error, ValidationError):
+        return schema_problem(error, limit)
+    text = " ".join(str(error).split()) or "no detail reported"
+    return text if len(text) <= limit else text[: limit - 1] + "\u2026"
+
+
+def schema_problem(error: ValidationError, limit: int = 220) -> str:
+    """Which field was wrong, not just that something was: a one-line, readable summary."""
+    parts = [
+        f"{'.'.join(str(item) for item in issue['loc'])}: {issue['msg']}"
+        for issue in error.errors()[:3]
+    ]
+    text = "; ".join(parts) or str(error).splitlines()[0]
+    return text if len(text) <= limit else text[: limit - 1] + "\u2026"
+
+
 def unreadable_payload(reason: str) -> dict:
     """The honest result when nothing was interpreted: no invented meaning, storyboard kept."""
     return {
@@ -294,7 +312,12 @@ def analyze_video(
                     moment["spokenText"] = []
             records.append(CreativeAnalysis.model_validate(data))
     except Exception as error:
-        native_error = f"Native video analysis unavailable ({type(error).__name__}, code {getattr(error, 'code', 'unknown')})."
+        # Name what actually went wrong: "ValueError" alone cannot be acted on, and this
+        # line is the only record of why the whole-video read was abandoned.
+        native_error = (
+            f"Native video analysis unavailable ({type(error).__name__}, code "
+            f"{getattr(error, 'code', 'unknown')}): {brief_reason(error)}"
+        )
     finally:
         if uploaded is not None:
             try:
@@ -365,7 +388,7 @@ def analyze_video(
             return stamped(
                 unreadable_payload(
                     "The sampled-frame reply did not match the analysis schema "
-                    f"({str(error).splitlines()[0]}). Reanalyze when the provider is available."
+                    f"({schema_problem(error)}). Reanalyze when the provider is available."
                 )
             )
 
