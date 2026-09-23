@@ -136,14 +136,18 @@ class GitHubPublisher:
             )
         version.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source / "funnels" / variant, version)
-        from .funnel_steps import require_renderer, steps
+        # Two independent renderer contracts: funnel-steps-v1 for a per-step design, and
+        # growth-blocks-vN for a campaign landing. Aliased, because both take a lab path
+        # first and a shadowed name would silently check the wrong contract.
+        from .blueprint import require_renderer as require_growth_blocks
+        from .funnel_steps import require_renderer as require_funnel_steps
+        from .funnel_steps import steps
 
         if any(load_yaml(version / step["file"]).get("design") for step in steps(version)):
-            require_renderer(checkout)
-        if (load_yaml(version / "steps/landing.yaml").get("props") or {}).get("growthDesign"):
-            from .blueprint import require_renderer
-
-            require_renderer(checkout)
+            require_funnel_steps(checkout)
+        landing_props = load_yaml(version / "steps/landing.yaml").get("props") or {}
+        if landing_props.get("growthDesign"):
+            require_growth_blocks(checkout, landing_props["growthDesign"]["schemaVersion"])
         contract_paths = register_version_contracts(checkout, version, variant)
         original_site = (checkout / "funnels/site.yaml").read_bytes()
         patch_site(

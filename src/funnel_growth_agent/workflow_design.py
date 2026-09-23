@@ -11,6 +11,7 @@ from dataclasses import replace
 
 from .apply import patch_identities, patch_site
 from .blueprint import RECIPES, baseline_blueprint, compose_document, require_renderer
+from .campaign import research_fingerprint
 from .landing_patch import dump_yaml, load_yaml
 from .models import PageBlueprint
 from .proposal import propose
@@ -71,6 +72,7 @@ def prepare_directions(workflow, draft: dict, payload: dict, selected, analyses)
         brief = {
             "task": "Design a full landing_rebuild with the supplied recipe. No image generation yet.",
             "goalPrompt": draft.get("goalPrompt", ""),
+            "campaignBrief": draft.get("campaignBrief"),
             "changeLevel": "heavy",
             "recipe": recipe,
             "revisionRequest": payload,
@@ -139,6 +141,7 @@ def prepare_directions(workflow, draft: dict, payload: dict, selected, analyses)
         "dist": str(dist),
         "input": payload,
         "expectedRevision": draft.get("readyRevision") or 0,
+        "campaignFingerprint": research_fingerprint(draft),
     }
     draft["status"] = "awaiting_direction"
     workflow._event(

@@ -184,6 +184,16 @@ def _tree_digest(root: Path) -> str:
 
 
 def check_media_plan(plan: MediaPlan, proposal: SavedProposal, settings: Settings) -> None:
+    from .web_assets import valid_asset
+
+    for item in plan.sourced:
+        if not isinstance(proposal.changes, PageBlueprint):
+            raise ApplyError("Sourced media requires a campaign blueprint")
+        asset = settings.web_assets.get(item.asset_id)
+        if not asset or not valid_asset(asset, settings):
+            raise ApplyError(
+                "Sourced media must identify an inspected, unchanged local catalog asset"
+            )
     """Refuse sources the model was not offered, before anything is downloaded or generated."""
     known = {item.creative_id for item in proposal.creative_evidence}
     clip = plan.hero_video

@@ -49,6 +49,7 @@ class ProducedMedia:
     files: ProducedFiles = field(default_factory=ProducedFiles)
     cached_files: int = 0
     tiles: list[Any] = field(default_factory=list)  # media.TileResult per generated tile
+    sourced_credits: dict[str, dict] = field(default_factory=dict)
 
 
 def _apply_copy(section: dict[str, Any], copy: SectionCopy | HeroCopyChanges) -> None:
@@ -218,7 +219,7 @@ def validate_landing_changes(
         from .blueprint import compose_document, require_renderer
 
         root = next(parent for parent in landing_path.parents if parent.name == "funnels").parent
-        require_renderer(root)
+        require_renderer(root, changes.schema_version)
         compose_document(load_yaml(landing_path), changes, placeholders=True)
         return
     with TemporaryDirectory(prefix="landing-preflight-") as folder:

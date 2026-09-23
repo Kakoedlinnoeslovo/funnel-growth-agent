@@ -1270,6 +1270,28 @@ def produce_media(
     thumb_files: set[str] = set()
     cached = 0
 
+    sourced_credits = {}
+    from .web_assets import valid_asset
+
+    for item in plan.sourced:
+        asset = settings.web_assets.get(item.asset_id)
+        if not asset or not valid_asset(asset, settings):
+            raise ApplyError("Source image is missing or changed; refresh campaign research")
+        name = f"{item.asset_id}-{asset['sha256'][:12]}.webp"
+        rel = f"assets/showcase/{name}"
+        thumb_rel = f"assets/thumbs/showcase/{name}"
+        _stage(Path(asset["path"]), variant_dir / "assets/showcase", name)
+        _stage(Path(asset["path"]), variant_dir / "assets/thumbs/showcase", name)
+        showcase[(item.group, item.slot)] = rel
+        showcase_files.add(rel)
+        thumb_files.add(thumb_rel)
+        sourced_credits[rel] = {
+            "image": rel,
+            "url": asset["sourceUrl"],
+            "label": asset["credit"] or asset["label"],
+            "license": asset["license"],
+        }
+
     clip = plan.hero_video
     if clip is not None:
         encoded = settings.media_cache_dir / "encoded" / clip.stem
@@ -1342,4 +1364,5 @@ def produce_media(
         ),
         cached_files=cached,
         tiles=results,
+        sourced_credits=sourced_credits,
     )

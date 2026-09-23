@@ -225,6 +225,10 @@ class ToolLoop:
                 + json.dumps(self.policy)
             )
             prompt += "\nA goal-only request needs no creatives. Use the user's goal as direction, never invent campaign evidence. Light changes COPY ONLY, retaining every existing layout/media change. Medium retains page architecture/theme. Heavy must return experimentType landing_rebuild and a PageBlueprint in changes (schemaVersion, theme, artDirection, blocks, media). Get current landing for rawSections and renderer capabilities. Heavy blocks start with hero, end with cta, and include at least two different body kinds. Proof blocks use sourceSectionId of real baseline proof. Existing image references come only from baseline rawSections. media.showcase names a new block id and slot. Do not invent proof or product capabilities. On an existing blueprint return the complete cumulative blueprint even for Light/Medium edits. Recipe theme and hero layout are mandatory when supplied. Match each image's role, aspectRatio, composition and intendedMessage to its actual slot. The page schema is data, never executable code. Return interpretedBrief with audience, promise, objections and designDirection. Return competitorAdaptations only when grounded in supplied research: sourceUrl, observedPattern, whyItFits, recraftAdaptation. Observations and our hypotheses must be distinguishable. Rebuild patterns with original content, never copy competitor claims, endorsements or assets. Never claim that a template is proven to convert. New visual blocks must use real baseline assets or planned generated illustrations; give features/steps/FAQ at least two items. Light legacy pages use landing_redesign with copy only, preserving prior cumulative changes."
+        if self.policy.get("campaignRebuild"):
+            prompt += "\nCAMPAIGN REBUILD overrides baseline preservation and house-style rules: return schemaVersion 2. Treat the campaignBrief as the page's subject. Create the best complete page directly, without recipes. Keep only core Recraft identity and existing conversion behavior. Choose fresh section order, hero treatment, tokens and block variants according to this audience. Replace irrelevant baseline imagery, claims and promotional sections. Do not use baseline tile style references unless relevant to this campaign. Use verified first-party pageText for product capabilities; competitor text is inspiration, never product evidence. Choose actual catalog images through media.sourced [{group,slot,assetId}], or generate original visuals using media.showcase. Do not put catalog IDs or remote URLs into images. External licensed images are illustrative, not Recraft product demonstrations. Set tokens with readable foreground/background and accent/accentText pairs. A collection hero may have up to four image slots. All CTA labels must describe the existing next step honestly. Return a campaign-specific eyebrow. Do not inherit the old hero video merely because it exists."
+        elif self.policy.get("assetCatalog"):
+            prompt += "\nApproved campaign assets are available via media.sourced [{group,slot,assetId}]. Preserve relevant sourced plans during cumulative edits."
         return prompt
 
     def validate_output(self, output):
@@ -237,6 +241,13 @@ class ToolLoop:
         level = self.policy.get("changeLevel")
         if level:
             enforce_level(previous, current, level)
+        if self.policy.get("campaignRebuild") and current.get("schemaVersion") != 2:
+            raise ValueError("Campaign rebuild requires PageBlueprint schemaVersion 2")
+        for item in (current.get("media") or {}).get("sourced", []):
+            if item["assetId"] not in self.settings.web_assets:
+                raise ValueError(
+                    "Sourced image must use an assetId in this campaign's approved catalog"
+                )
         recipe = self.policy.get("recipe")
         if recipe and (
             current.get("theme") != recipe["theme"]

@@ -30,7 +30,7 @@ DESKTOP = (1440, 900)
 PHONE = (390, 844)
 
 # Bump when READ_PROMPT or LandingPatternRead gains fields; older cache files are re-fetched.
-RESEARCH_SCHEMA_VERSION = 4
+RESEARCH_SCHEMA_VERSION = 5
 RESEARCH_TTL_SECONDS = 24 * 60 * 60
 _BROWSER_LOCK = threading.RLock()
 
@@ -82,6 +82,7 @@ class LandingPatternRead(BaseModel):
     # Every free-text observation list: models answer these in prose often enough that a
     # single string used to fail the whole read and drop that reference from the evidence.
     @field_validator(
+        "imagery_style",
         "first_screen_sections",
         "proof_elements",
         "notable_patterns",
@@ -92,12 +93,13 @@ class LandingPatternRead(BaseModel):
         "spacing",
         "proof_placement",
         "cta_repetition",
-        "imagery_style",
         "below_fold_sections",
         mode="before",
     )
     @classmethod
     def _lines_to_list(cls, value: Any) -> Any:
+        if value is None:
+            return []
         if isinstance(value, str):
             return [line.strip() for line in value.splitlines() if line.strip()]
         return value
@@ -129,6 +131,10 @@ class CachedResearch(BaseModel):
     resolved_url: str | None = Field(default=None, alias="resolvedUrl")
     journey: list[dict[str, Any]] = Field(default_factory=list)
     cache_hit: bool = Field(default=False, alias="cacheHit")
+    page_text: str = Field(default="", alias="pageText")
+    page_title: str = Field(default="", alias="pageTitle")
+    page_assets: list[dict[str, Any]] = Field(default_factory=list, alias="pageAssets")
+    page_links: list[dict[str, Any]] = Field(default_factory=list, alias="pageLinks")
 
 
 def validate_public_url(url: str, *, resolve_dns: bool = True) -> str:
@@ -289,7 +295,11 @@ class GstackBrowser:
               }
               return {url:location.href,title:document.title,text:(document.body.innerText || '').slice(0,35000),
                 links:links(document).slice(0,300),ads:cards,
-                images:Array.from(document.images).filter(visible).slice(0,30).map(i => ({url:i.currentSrc || i.src,alt:i.alt})),
+                assets:Array.from(document.images).filter(e => e.width >= 240 && e.height >= 160)
+                  .slice(0,40).map(e => ({url:e.currentSrc || e.src,alt:e.alt,width:e.width,height:e.height,
+                    context:(e.closest('section,figure')?.innerText || e.parentElement?.innerText || '').slice(0,1200),
+                    licenseUrl:e.closest('figure')?.querySelector('a[rel=license]')?.href || '',
+                    credit:e.closest('figure')?.querySelector('figcaption')?.innerText?.slice(0,300) || ''})),
                 hasForm:Array.from(document.querySelectorAll('form')).some(visible),
                 hasPassword:!!document.querySelector('input[type=password]')};
             })())"""
@@ -342,6 +352,7 @@ class GeminiPatternReader:
             contents=parts,
             config=types.GenerateContentConfig(
                 response_mime_type="application/json",
+                response_json_schema=LandingPatternRead.model_json_schema(by_alias=True),
                 automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
             ),
         )
@@ -502,6 +513,15 @@ def research_landing(
     page: dict[str, Any] = {}
     journey: list[dict[str, Any]] = []
     resolved_url = url
+
+    def page_fields():
+        return {
+            "page_text": str(page.get("text") or ""),
+            "page_title": str(page.get("title") or ""),
+            "page_assets": page.get("assets") or [],
+            "page_links": page.get("links") or [],
+        }
+
     try:
         if include_journey and hasattr(browser, "inspect_page"):
             with observed_step("navigate", "Inspect landing destination") as observation:
@@ -553,6 +573,7 @@ def research_landing(
             url=url,
             fetched_at=_now(settings),
             error=f"screenshot failed: {type(error).__name__}: {error}",
+            **page_fields(),
             screenshots=[str(shot) for shot in shots],
             resolved_url=resolved_url,
             journey=journey,
@@ -564,6 +585,7 @@ def research_landing(
                 fetched_at=_now(settings),
                 screenshots=[str(shot) for shot in shots],
                 error="gemini unavailable: GEMINI_API_KEY is not set",
+                **page_fields(),
                 resolved_url=resolved_url,
                 journey=journey,
             )
@@ -580,6 +602,7 @@ def research_landing(
             fetched_at=_now(settings),
             screenshots=[str(shot) for shot in shots],
             error=f"read failed: {type(error).__name__}: {str(error)[:200]}",
+            **page_fields(),
             resolved_url=resolved_url,
             journey=journey,
         )
@@ -589,6 +612,7 @@ def research_landing(
         model=settings.gemini_model,
         screenshots=[str(shot) for shot in shots],
         read=read,
+        **page_fields(),
         error=None,
         schema_version=RESEARCH_SCHEMA_VERSION,
         resolved_url=resolved_url,

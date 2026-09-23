@@ -63,7 +63,8 @@ def no_live_api(monkeypatch):
 
 def test_configuration_defaults_and_untrusted_urls():
     config = ResearchConfig()
-    assert config.competitors == ["kittl", "canva", "zeely", "runway", "luma"]
+    assert config.competitors == []
+    assert config.discovery == "auto"
     assert config.country == "GB"
     assert "adLibraryUrls" in config.model_dump()
     assert ResearchConfig(country="us").country == "US"
@@ -71,7 +72,7 @@ def test_configuration_defaults_and_untrusted_urls():
         adLibraryUrls=["https://www.facebook.com/ads/library/?id=123&access_token=secret"]
     ).ad_library_urls == ["https://www.facebook.com/ads/library/?id=123"]
     for payload in (
-        {"competitors": ["unknown"]},
+        {"competitors": [""]},
         {"country": "ALL"},
         {"landingUrls": ["https://127.0.0.1/"]},
         {"adLibraryUrls": ["https://evil.example/ads/library/?id=1"]},
@@ -235,7 +236,12 @@ def test_existing_screenshot_only_fake_does_not_use_network(settings, monkeypatc
         "funnel_growth_agent.competitor_research._api_ads",
         lambda *args: pytest.fail("Injected offline browser must stay offline"),
     )
-    results = research_competitors(settings, None, browser=FakeBrowser(), reader=FakeReader())
+    results = research_competitors(
+        settings,
+        {"competitors": ["kittl", "canva", "zeely", "runway", "luma"], "discovery": "manual"},
+        browser=FakeBrowser(),
+        reader=FakeReader(),
+    )
     assert len(results) == 5
     assert all(result["status"] == "blocked" for result in results)
 
