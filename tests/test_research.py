@@ -79,6 +79,27 @@ def test_pattern_read_normalises_imagery_fields() -> None:
     assert LandingPatternRead.model_validate({}).imagery_formats == []
 
 
+def test_pattern_read_keeps_prose_observations_instead_of_failing() -> None:
+    """The reader answers descriptive fields in prose; a page read must survive that."""
+    read = LandingPatternRead.model_validate(
+        {
+            "heroComposition": "Centered vertical flow with the CTA above the fold.",
+            "typography": "One grotesk at three sizes",
+            "spacing": "Roomy, 96px between sections",
+            "proofPlacement": "Logos directly under the hero",
+            "ctaRepetition": "Twice: hero and footer",
+            "notablePatterns": "Live editor preview\nPricing anchored to a free tier",
+        }
+    )
+    assert read.hero_composition == ["Centered vertical flow with the CTA above the fold."]
+    assert read.typography == ["One grotesk at three sizes"]
+    assert read.cta_repetition == ["Twice: hero and footer"]
+    assert read.notable_patterns == [
+        "Live editor preview",
+        "Pricing anchored to a free tier",
+    ]
+
+
 def test_research_without_gemini_key_returns_error_not_exception(settings) -> None:
     record = research_landing("https://www.kittl.com/", settings, browser=FakeBrowser())
     assert record.read is None and "GEMINI_API_KEY" in record.error

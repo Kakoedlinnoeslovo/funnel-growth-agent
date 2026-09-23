@@ -41,6 +41,16 @@ def campaign_identity(brief: dict | None) -> tuple[str, str]:
     )
 
 
+def campaign_fingerprint(draft: dict) -> str:
+    """What a design direction was drawn for.
+
+    Narrower than research_fingerprint on purpose: directions are designed for an audience and
+    a promoted task, so re-reading a competitor page must not discard three finished designs,
+    while a new audience or task must.
+    """
+    return fingerprint({"identity": campaign_identity(draft.get("campaignBrief")), "version": 1})
+
+
 def research_fingerprint(draft: dict) -> str:
     config = {k: v for k, v in (draft.get("research") or {}).items() if k != "refresh"}
     return fingerprint(

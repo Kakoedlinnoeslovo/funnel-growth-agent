@@ -8,8 +8,9 @@ import math
 import subprocess
 import time
 from pathlib import Path
+from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .models import CreativeAnalysis, VideoEvidence
 
@@ -29,6 +30,56 @@ class _VideoSynthesis(BaseModel):
     audience_intent: str = Field(alias="audienceIntent")
     cta_intent: str = Field(alias="ctaIntent")
     suggested_landing_theme: str = Field(alias="suggestedLandingTheme")
+
+
+def _aliases(model: type[BaseModel]) -> set[str]:
+    return {name for name in model.model_fields} | {
+        field.alias for field in model.model_fields.values() if field.alias
+    }
+
+
+CREATIVE_FIELDS = _aliases(CreativeAnalysis) - {"video_evidence", "videoEvidence"}
+EVIDENCE_FIELDS = _aliases(VideoEvidence)
+
+
+def level_fields(payload: Any) -> dict:
+    """Put each returned field at the level the schema expects.
+
+    The provider is asked for videoEvidence nested inside a CreativeAnalysis and sometimes
+    flattens the two, or wraps both in a container key. Moving a field is not repairing
+    evidence: nothing is dropped, rewritten or invented, and an unknown key still fails.
+    """
+    if not isinstance(payload, dict):
+        raise ValueError("The video analysis reply was not a JSON object")
+    data = dict(payload)
+    if len(data) == 1:
+        key, inner = next(iter(data.items()))
+        if isinstance(inner, dict) and key not in CREATIVE_FIELDS | {"videoEvidence"}:
+            data = dict(inner)
+    evidence = dict(data.get("videoEvidence") or data.get("video_evidence") or {})
+    data.pop("video_evidence", None)
+    for name in [key for key in data if key in EVIDENCE_FIELDS - CREATIVE_FIELDS]:
+        evidence.setdefault(name, data.pop(name))
+    for name in [key for key in evidence if key in CREATIVE_FIELDS - EVIDENCE_FIELDS]:
+        data.setdefault(name, evidence.pop(name))
+    data["videoEvidence"] = evidence
+    return data
+
+
+def unreadable_payload(reason: str) -> dict:
+    """The honest result when nothing was interpreted: no invented meaning, storyboard kept."""
+    return {
+        "visualHook": "Visual interpretation unavailable",
+        "primaryPromise": "Unknown; reanalyze this video",
+        "audienceIntent": "Unknown",
+        "ctaIntent": "Unspecified",
+        "suggestedLandingTheme": "No reliable interpretation available",
+        "videoEvidence": {
+            "concept": "Video interpretation is unavailable.",
+            "narrative": "Storyboard frames are available to inspect. No narration or visual meaning has been confirmed.",
+            "limitations": [reason],
+        },
+    }
 
 
 def run_media(args: list[str], *, timeout: int = 90) -> bytes:
@@ -226,7 +277,7 @@ def analyze_video(
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 ),
             )
-            data = json.loads(response.text)
+            data = level_fields(json.loads(response.text))
             evidence = data.setdefault("videoEvidence", {})
             evidence.update(
                 method="video_audio",
@@ -280,40 +331,43 @@ def analyze_video(
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
                 ),
             )
-            data = json.loads(response.text)
+            data = level_fields(json.loads(response.text))
         except Exception as error:
-            data = {
-                "visualHook": "Visual interpretation unavailable",
-                "primaryPromise": "Unknown; reanalyze this video",
-                "audienceIntent": "Unknown",
-                "ctaIntent": "Unspecified",
-                "suggestedLandingTheme": "No reliable interpretation available",
-                "videoEvidence": {
-                    "concept": "Video interpretation is unavailable.",
-                    "narrative": "Storyboard frames are available to inspect. No narration or visual meaning has been confirmed.",
-                    "limitations": [
-                        f"Sampled-frame analysis also failed ({type(error).__name__}, code {getattr(error, 'code', 'unknown')}). Reanalyze when the provider is available."
-                    ],
-                },
-            }
-        evidence = data.setdefault("videoEvidence", {})
-        evidence.update(
-            method="visual_only",
-            duration=duration,
-            fps=FPS,
-            audioAvailable=False,
-            coveredIntervals=[],
-            candidateClips=[],
-            storyboard=frames,
-        )
-        evidence["limitations"] = [
-            native_error,
-            "Visual-only analysis — narration unavailable; intermediate frames were not analyzed.",
-            *evidence.get("limitations", []),
-        ]
-        for moment in evidence.get("moments", []):
-            moment["spokenText"] = []
-        return CreativeAnalysis.model_validate(data)
+            data = unreadable_payload(
+                f"Sampled-frame analysis also failed ({type(error).__name__}, code {getattr(error, 'code', 'unknown')}). Reanalyze when the provider is available."
+            )
+
+        def stamped(payload: dict) -> CreativeAnalysis:
+            evidence = payload.setdefault("videoEvidence", {})
+            evidence.update(
+                method="visual_only",
+                duration=duration,
+                fps=FPS,
+                audioAvailable=False,
+                coveredIntervals=[],
+                candidateClips=[],
+                storyboard=frames,
+            )
+            evidence["limitations"] = [
+                native_error,
+                "Visual-only analysis — narration unavailable; intermediate frames were not analyzed.",
+                *evidence.get("limitations", []),
+            ]
+            for moment in evidence.get("moments", []):
+                moment["spokenText"] = []
+            return CreativeAnalysis.model_validate(payload)
+
+        try:
+            return stamped(data)
+        except ValidationError as error:
+            # A reply that misses the schema would otherwise cost the storyboard and every
+            # other creative field: keep the frames and say what could not be read.
+            return stamped(
+                unreadable_payload(
+                    "The sampled-frame reply did not match the analysis schema "
+                    f"({str(error).splitlines()[0]}). Reanalyze when the provider is available."
+                )
+            )
 
     analysis = records[0]
     evidence = analysis.video_evidence

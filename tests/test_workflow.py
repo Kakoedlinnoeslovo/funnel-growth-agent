@@ -908,3 +908,65 @@ def test_audience_projection_keeps_sources_separate_and_missing_values_null():
     assert view["breakdowns"]["country"]["rows"] == [{"ad_id": "a", "meta_purchases": 4}]
     assert view["creative_funnels"] == []
     assert len(report["creative_audience"]["breakdowns"]["country"]["rows"]) == 2
+
+
+def test_captured_but_unread_research_is_retried_not_reused(workflow):
+    """A screenshotted page we could not interpret is not saved evidence: try it again."""
+
+    class BlindReader:
+        def __init__(self):
+            self.calls = 0
+
+        def read(self, url, shots):
+            self.calls += 1
+            raise ValueError("the page could not be read")
+
+    reader = BlindReader()
+    workflow.reader = reader
+    catalog = workflow.catalog()
+    baseline = next(row for row in catalog["baselines"] if row["version"] == "v7")
+    draft = workflow.load(
+        workflow.create(
+            {
+                "baseVersion": "v7",
+                "baseHash": baseline["hash"],
+                "reportToken": catalog["reportToken"],
+                "creativeIds": ["ad_1"],
+                "research": {"competitors": [], "landingUrls": ["https://www.kittl.com/"]},
+            }
+        )["id"]
+    )
+    workflow.research_context(draft)
+    captured = [row for row in draft["context"]["competitors"] if row.get("screenshots")]
+    assert captured and not any(row.get("read") for row in captured)
+    assert draft["context"]["complete"] is False
+    step = next(e for e in draft["events"] if e["data"].get("id") == "competitor-research")
+    assert step["data"]["status"] == "unavailable" and step["data"]["observed"] == 0
+    workflow.reader = FakeReader()
+    workflow.research_context(draft)
+    assert draft["context"]["complete"] is True
+    assert any(row.get("read") for row in draft["context"]["competitors"])
+
+
+def test_research_with_nothing_to_read_stays_complete(workflow):
+    """Discovery that never reached a page would fail the same way: do not loop on it."""
+    catalog = workflow.catalog()
+    baseline = next(row for row in catalog["baselines"] if row["version"] == "v7")
+    # Competitors are named explicitly: discovery no longer carries a default list, so an
+    # empty config would research nothing and prove nothing about an unreachable page.
+    draft = workflow.load(
+        workflow.create(
+            {
+                "baseVersion": "v7",
+                "changeLevel": "medium",
+                "baseHash": baseline["hash"],
+                "reportToken": catalog["reportToken"],
+                "creativeIds": ["ad_1"],
+                "research": {"competitors": ["kittl"], "discovery": "manual"},
+            }
+        )["id"]
+    )
+    workflow.research_context(draft)
+    # However many sources discovery names, none of them was captured to read.
+    assert not any(row.get("screenshots") for row in draft["context"]["competitors"])
+    assert draft["context"]["complete"] is True

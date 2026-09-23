@@ -26,7 +26,7 @@ class ChatRequest(BaseModel):
 
 class ChatDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: Literal["answer", "clarify", "edit"]
+    action: Literal["answer", "clarify", "edit", "analyze"]
     text: str = Field(min_length=1, max_length=12000)
     instruction: str = Field(default="", max_length=8000)
     agreedBrief: str = Field(default="", max_length=8000)
@@ -46,6 +46,13 @@ Choose answer for questions, explanations, comparisons and hypothetical ideas. C
 when the desired change is ambiguous. Choose edit only for a clear request to create or change
 the landing, including confirmation of a specific previously discussed change. A question about
 what could improve is discussion, not permission to generate. Never claim a change already ran.
+Choose analyze when the user asks to read, analyze or re-read the selected creatives or their
+video, or when the saved creative evidence failed and the user is asking about that evidence:
+the workspace then runs that analysis and shows the result. Say what you are starting, never
+that it has finished. A clear request to create or change the landing is an edit even when the
+creative analysis is missing, failed or covers ad copy only, because generation reads the
+selected creatives itself and reports what it could not verify. Do not ask the user to run an
+analysis before an explicitly requested landing.
 Explicit Light/Medium/Heavy levels are authoritative. Auto rebuilds for a new audience or
 promoted task and keeps specific edits local. Return campaignBrief whenever the user establishes
 or updates audience/task/outcome/constraints/references; preserve unchanged fields verbatim.
@@ -63,10 +70,9 @@ unavailable, say so. Recommendations are hypotheses, never proven conversion imp
 do not say one treatment 'outperforms' another or 'converts better' without measured evidence.
 Do not propose product capability copy as fact unless it is supported by the supplied landing
 or verified evidence; clearly label capability examples that need verification.
-You cannot browse, analyze fresh media, publish or execute tools in this
-turn. Direct research refresh/video reanalysis to the matching expandable card controls, and
-publishing to the explicit Publish button. Published pages are immutable: explain how to use
-them as a new baseline. Keep ordinary replies within about 120 words, using short paragraphs or
+You cannot browse the web, publish or execute other tools in this turn. Direct a competitor
+research refresh to the Refresh research control, and publishing to the explicit Publish
+button. Published pages are immutable: explain how to use them as a new baseline. Keep ordinary replies within about 120 words, using short paragraphs or
 bullets; longer answers only when requested. No raw HTML, technical logs or hidden reasoning.
 """
 
@@ -275,7 +281,12 @@ class ConversationMixin:
             draft["editScope"] = decision.editScope
             conversation["status"] = "idle"
             self.save(draft)
-            if decision.action == "edit":
+            if decision.action == "analyze":
+                # Reading the selected creatives is the workspace's own job, not a control the
+                # assistant can only point at: hand it the same worker an edit uses.
+                self._start_locked_job(draft, "reanalyze", {}, message_id=reply_id)
+                handed_off = True
+            elif decision.action == "edit":
                 action = "revise" if draft.get("readyRevision") else "generate"
                 self._start_locked_job(
                     draft,
