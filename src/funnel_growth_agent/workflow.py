@@ -21,6 +21,7 @@ from .apply import _tree_digest, apply_run, hard_diff_site, patch_site
 from .campaign import (
     CampaignBrief,
     CampaignDecision,
+    campaign_fingerprint,
     interpret_campaign,
     research_fingerprint,
     resolve_level,
@@ -757,7 +758,7 @@ class Workflow(ConversationMixin):
                 or (draft.get("readyRevision") or 0) != ds.get("expectedRevision")
                 or (
                     ds.get("campaignFingerprint")
-                    and ds["campaignFingerprint"] != research_fingerprint(draft)
+                    and ds["campaignFingerprint"] != campaign_fingerprint(draft)
                 )
             ):
                 raise ValueError("These design directions are stale; regenerate them")
@@ -863,6 +864,17 @@ class Workflow(ConversationMixin):
         thread.start()
         return {"id": draft_id, "status": draft["status"]}
 
+    @staticmethod
+    def settled_status(draft: dict) -> str:
+        """Where a draft rests after refreshing evidence.
+
+        Refreshed evidence never discards work in progress: unchosen directions stay
+        choosable, so reading a competitor page again cannot cost three designed options.
+        """
+        if draft.get("readyRevision"):
+            return "ready"
+        return "awaiting_direction" if draft.get("directionSet") else "draft"
+
     def _job(self, draft: dict, action: str, payload: dict) -> None:
         try:
             if action == "prepare_publish":
@@ -871,12 +883,12 @@ class Workflow(ConversationMixin):
                 self.publish(draft)
             elif action == "reanalyze":
                 self.analyze_selection(draft, refresh=True)
-                draft["status"] = "ready" if draft.get("readyRevision") else "draft"
+                draft["status"] = self.settled_status(draft)
             elif action == "research":
                 draft["research"] = payload
                 draft["context"] = None
                 self.research_context(draft)
-                draft["status"] = "ready" if draft.get("readyRevision") else "draft"
+                draft["status"] = self.settled_status(draft)
             else:
                 self.generate(draft, payload)
             draft["retry"] = None
@@ -934,7 +946,13 @@ class Workflow(ConversationMixin):
             on_result=result,
             search_provider=self.search_provider,
         )
-        draft["context"]["complete"] = True
+        records = draft["context"]["competitors"]
+        observed = [row for row in records if row.get("read")]
+        # A page that was captured but not interpreted is a failed read, not a finding. With
+        # no finding at all, stay incomplete so the next run retries instead of designing
+        # against an empty set. Pages discovery never reached would fail the same way again.
+        unread = [row for row in records if not row.get("read") and row.get("screenshots")]
+        draft["context"]["complete"] = bool(observed) or not unread
         if draft.get("campaignBrief"):
             from .web_assets import build_catalog
 
@@ -957,9 +975,13 @@ class Workflow(ConversationMixin):
             "step_completed",
             {
                 "id": "competitor-research",
-                "label": "Competitor research collected",
+                "label": "Competitor research collected"
+                if observed
+                else "No competitor page could be read",
                 "stage": "research",
-                "count": len(draft["context"]["competitors"]),
+                "count": len(records),
+                "observed": len(observed),
+                "status": "completed" if observed else "unavailable",
             },
         )
 
@@ -1053,6 +1075,12 @@ class Workflow(ConversationMixin):
                             row["imagePath"] = poster["path"]
                             row["frameSource"] = f"Video storyboard · {poster['timestamp']:.1f}s"
                     draft["analyses"].append(item.model_dump(by_alias=True))
+                    # A later successful read replaces the earlier one, so its warning must go
+                    # too: a stale "no visual analysis" line also misleads the design brief.
+                    prefix = f"{item.creative_id}: "
+                    draft["warnings"] = [
+                        text for text in draft["warnings"] if not text.startswith(prefix)
+                    ]
                     if item.model == "title-body-fallback":
                         draft["warnings"].append(
                             f"{item.creative_id}: visual analysis unavailable; using ad copy only."

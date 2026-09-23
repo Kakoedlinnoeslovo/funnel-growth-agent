@@ -381,3 +381,43 @@ def test_narration_only_and_changing_subtitles_remain_separate(settings, source)
     assert result.visible_text == []
     assert result.video_evidence.moments[0].spoken_text == ["Make hundreds of variations"]
     assert [m.visible_text for m in result.video_evidence.moments] == [[], ["BEFORE"], ["AFTER"]]
+
+
+def test_flattened_provider_reply_keeps_its_video_evidence(settings, source):
+    """The reply sometimes arrives with the two levels merged; the evidence still counts."""
+    data = observation()
+    flat = {k: v for k, v in data.items() if k != "videoEvidence"} | data["videoEvidence"]
+    analysis = video.analyze_video(source, settings, client=Client([flat]))
+    evidence = analysis.video_evidence
+    assert evidence.method == "video_audio"
+    assert evidence.concept == "One design becomes a consistent set"
+    assert [m.kind for m in evidence.moments] == ["demonstration", "cta"]
+    assert analysis.primary_promise == "Create consistent icons"
+
+
+def test_wrapped_provider_reply_keeps_its_video_evidence(settings, source):
+    client = Client([{"creativeAnalysis": observation()}])
+    analysis = video.analyze_video(source, settings, client=client)
+    assert analysis.video_evidence.concept == "One design becomes a consistent set"
+    assert analysis.visible_text == ["TRY IT"]
+
+
+def test_prose_lists_do_not_discard_the_analysis(settings, source):
+    data = observation()
+    data["videoEvidence"]["landingImplications"] = "Lead with the sequence\nShow the export"
+    data["videoEvidence"]["moments"][0]["visibleText"] = "EDIT"
+    analysis = video.analyze_video(source, settings, client=Client([data]))
+    evidence = analysis.video_evidence
+    assert evidence.landing_implications == ["Lead with the sequence", "Show the export"]
+    assert evidence.moments[0].visible_text == ["EDIT"]
+
+
+def test_unusable_fallback_reply_keeps_the_storyboard(settings, source):
+    """A visual-only reply that misses the schema must not cost the whole creative read."""
+    client = Client([RuntimeError("native unavailable"), {"unexpected": "shape"}])
+    analysis = video.analyze_video(source, settings, client=client)
+    evidence = analysis.video_evidence
+    assert evidence.method == "visual_only" and evidence.storyboard
+    assert "unavailable" in evidence.concept and not evidence.moments
+    assert any("did not match the analysis schema" in text for text in evidence.limitations)
+    assert any("Reanalyze" in text for text in evidence.limitations)

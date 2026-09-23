@@ -69,7 +69,9 @@ def media_sources(settings: Settings, ranked: list[RankedCreative] | None) -> di
         "creatives": creatives,
         "rules": (
             "Pick a clip that shows the promised action within its first 3 seconds. Clips are "
-            "trimmed at apply time to start+duration (4 to 30 s). videoId must come from `youtube`, "
+            "trimmed at apply time to start+duration (4 to 30 s). A YouTube durationSeconds is "
+            "rounded, so start+duration must end at least one second before it; a creative "
+            "duration is exact. videoId must come from `youtube`, "
             "creativeId from `creatives`. Title-derived topics are search hints, not proof of "
             "what appears on screen. Missing durations are unknown, not zero."
         ),

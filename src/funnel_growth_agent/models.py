@@ -744,6 +744,14 @@ class VideoMoment(BaseModel):
     visible_text: list[str] = Field(default_factory=list, alias="visibleText")
     spoken_text: list[str] = Field(default_factory=list, alias="spokenText")
 
+    @field_validator("visible_text", "spoken_text", mode="before")
+    @classmethod
+    def _lines_to_list(cls, value: Any) -> Any:
+        # Gemini sometimes returns one newline-joined string instead of a list.
+        if isinstance(value, str):
+            return [line.strip() for line in value.splitlines() if line.strip()]
+        return value
+
     @model_validator(mode="after")
     def ordered(self):
         if self.end < self.start:
@@ -769,6 +777,19 @@ class VideoEvidence(BaseModel):
     advertised_claims: list[str] = Field(default_factory=list, alias="advertisedClaims")
     limitations: list[str] = Field(default_factory=list)
     storyboard: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator(
+        "landing_implications",
+        "observed_actions",
+        "advertised_claims",
+        "limitations",
+        mode="before",
+    )
+    @classmethod
+    def _lines_to_list(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return [line.strip() for line in value.splitlines() if line.strip()]
+        return value
 
     @model_validator(mode="after")
     def bounds(self):

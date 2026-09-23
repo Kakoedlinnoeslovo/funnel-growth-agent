@@ -132,7 +132,12 @@ def compose_document(
             row.pop("eyebrow", None)
         for ref in row["images"]:
             if ref not in allowed_images:
-                raise ValueError(f"Blueprint image {ref!r} is not an existing baseline asset")
+                raise ValueError(
+                    f"Blueprint image {ref!r} is not an existing baseline asset: images may only "
+                    "repeat an asset path exactly as it appears in the baseline rawSections. To "
+                    "show a new image instead, leave it out of images and plan it as "
+                    f"media.showcase with group {block.id!r} and its slot index."
+                )
         slots = sorted(slot for group, slot in planned if group == block.id)
         for slot in slots:
             while len(row["images"]) <= slot:

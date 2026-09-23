@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from funnel_growth_agent.agent import MAX_OUTPUT_RETRIES, MAX_TOKENS, ToolLoop, run_tool_loop
+from funnel_growth_agent.models import HeroVideoPlan, parse_model_output
 
 
 def response(*blocks, stop="tool_use"):
@@ -160,3 +161,86 @@ def test_baseline_constraint_errors_are_corrected_before_accepting(monkeypatch, 
     assert "press-quotes cannot be omitted" in feedback["content"]
     assert settings.landing_path.read_bytes() == original
     assert sum(kind == "proposal" for kind, _ in events) == 1
+
+
+def test_rejection_reason_reaches_the_retry_events_and_the_final_error(monkeypatch, settings):
+    """A failed generation has to say which rule the proposal broke, not just that it failed."""
+    bad = response(submitted({"proposal": {"decision": "experiment"}}))
+    settings, tools, _requests, events = setup_client(
+        monkeypatch, settings, [bad] * (MAX_OUTPUT_RETRIES + 1)
+    )
+    with pytest.raises(ValueError, match="experimentType") as failure:
+        run_tool_loop(settings, tools)
+    message = str(failure.value)
+    assert len(message) <= 240 and message.endswith("retry generation.")
+    reasons = [data["reason"] for kind, data in events if kind == "model_output_retry"]
+    assert reasons and all("experimentType" in reason for reason in reasons)
+
+
+def test_recipe_rejections_name_the_expected_composition(settings):
+    recipe = {"theme": "dark-showcase", "layout": "media-first", "body": ["steps", "gallery"]}
+    tools = ToolLoop(settings, policy={"changeLevel": "heavy", "recipe": recipe})
+    blueprint = {
+        "schemaVersion": 1,
+        "theme": "dark-showcase",
+        "artDirection": "Dark, high-contrast product story",
+        "blocks": [
+            {"id": "hero", "kind": "hero", "headline": "Ship 3D assets", "layout": "media-first"},
+            {
+                "id": "steps",
+                "kind": "steps",
+                "headline": "How it works",
+                "items": [
+                    {"title": "Upload a reference", "body": "Drop in the clip or image."},
+                    {"title": "Generate the asset", "body": "Export it straight into the scene."},
+                ],
+            },
+            {"id": "proof", "kind": "proof", "headline": "Proof", "sourceSectionId": "logo-strip"},
+            {"id": "gallery", "kind": "gallery", "headline": "Made with Recraft"},
+            {"id": "cta", "kind": "cta", "headline": "Start free"},
+        ],
+    }
+    output = parse_model_output(
+        {
+            "decision": "experiment",
+            "experimentType": "landing_rebuild",
+            "problem": "The page buries the workflow.",
+            "evidence": ["The creative leads with the workflow."],
+            "hypothesis": "A workflow-first page explains the product faster.",
+            "primaryMetric": "landing_cta_rate",
+            "changes": blueprint,
+        }
+    )
+    with pytest.raises(ValueError) as failure:
+        tools.validate_output(output)
+    message = str(failure.value)
+    assert "['steps', 'gallery']" in message and "'proof'" in message
+    assert "received" in message
+
+
+def test_hero_clip_must_end_before_a_rounded_source_length(settings, monkeypatch):
+    """YouTube reports a rounded length, so a clip ending at it overruns the real file."""
+    tools = ToolLoop(settings, ranked=[])
+    monkeypatch.setattr(
+        "funnel_growth_agent.agent.media_sources",
+        lambda *_: {
+            "youtube": [{"videoId": "abcdefghijk", "durationSeconds": 30}],
+            "creatives": [{"creativeId": "ad_1", "duration": 14.5}],
+        },
+    )
+    plan = HeroVideoPlan(
+        source="youtube", videoId="abcdefghijk", start=2, duration=28, label="Editor walkthrough"
+    )
+    with pytest.raises(ValueError, match="must end by 29s"):
+        tools.validate_clip(plan)
+    tools.validate_clip(plan.model_copy(update={"duration": 27}))
+    creative = HeroVideoPlan(
+        source="creative", creativeId="ad_1", start=0, duration=14.5, label="Uploaded ad clip"
+    )
+    with pytest.raises(ValueError, match="usable end"):
+        tools.validate_clip(creative)
+    tools.validate_clip(creative.model_copy(update={"duration": 14}))
+    unknown = HeroVideoPlan(
+        source="creative", creativeId="unknown_ad", start=0, duration=14, label="Unlisted clip"
+    )
+    tools.validate_clip(unknown)  # an id the media stage will reject stays its decision
