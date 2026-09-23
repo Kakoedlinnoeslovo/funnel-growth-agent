@@ -421,3 +421,15 @@ def test_unusable_fallback_reply_keeps_the_storyboard(settings, source):
     assert "unavailable" in evidence.concept and not evidence.moments
     assert any("did not match the analysis schema" in text for text in evidence.limitations)
     assert any("Reanalyze" in text for text in evidence.limitations)
+
+
+def test_failure_limitations_name_the_actual_problem(settings, source):
+    """'ValueError' alone is not a reason: both failure lines must say what went wrong."""
+    bad = observation()
+    bad["videoEvidence"]["moments"][0]["start"] = 100  # outside the analyzed interval
+    client = Client([bad, {"visualHook": "A frame", "unexpected": "shape"}])
+    evidence = video.analyze_video(source, settings, client=client).video_evidence
+    native, _visual, schema = evidence.limitations[:3]
+    assert "timestamps outside the analyzed interval" in native
+    assert "did not match the analysis schema" in schema
+    assert "primaryPromise: Field required" in schema
