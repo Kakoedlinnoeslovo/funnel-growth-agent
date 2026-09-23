@@ -141,10 +141,16 @@ def analyze_creative(
             if cached.schema_version == settings.analysis_schema_version:
                 is_video = bool(asset and asset.suffix.lower() in {".mp4", ".webm", ".mov"})
                 if (
-                    not is_video
-                    or (cached.analysis.video_evidence and cached.model != "title-body-fallback")
-                    or not call_model
-                ):
+                    cached.model != "title-body-fallback"
+                    and (
+                        not is_video
+                        or (
+                            cached.analysis.video_evidence
+                            and cached.analysis.video_evidence.concept
+                            != "Video interpretation is unavailable."
+                        )
+                    )
+                ) or not call_model:
                     return cached
             stale = cached
 

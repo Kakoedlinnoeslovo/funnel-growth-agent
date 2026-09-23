@@ -450,16 +450,24 @@ class ShowcaseImagePlan(BaseModel):
         return match.group(1) if match else None
 
 
+class SourcedImagePlan(BaseModel):
+    model_config = CAMEL
+    group: str = Field(min_length=1, max_length=80)
+    slot: int = Field(ge=0, le=3)
+    asset_id: str = Field(alias="assetId", pattern=r"^web-[a-f0-9]{20}$")
+
+
 class MediaPlan(BaseModel):
     model_config = CAMEL
 
     hero_video: HeroVideoPlan | None = Field(default=None, alias="heroVideo")
     showcase: list[ShowcaseImagePlan] = Field(default_factory=list, max_length=8)
+    sourced: list[SourcedImagePlan] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")
     def _unique_slots(self) -> MediaPlan:
-        seen = {(item.group, item.slot) for item in self.showcase}
-        if len(seen) != len(self.showcase):
+        seen = {(item.group, item.slot) for item in self.showcase + self.sourced}
+        if len(seen) != len(self.showcase) + len(self.sourced):
             raise ValueError("showcase plans repeat a (group, slot)")
         slots_by_group: dict[str, list[int]] = {}
         for item in self.showcase:
@@ -475,7 +483,7 @@ class MediaPlan(BaseModel):
         return self
 
     def is_empty(self) -> bool:
-        return self.hero_video is None and not self.showcase
+        return self.hero_video is None and not self.showcase and not self.sourced
 
 
 class RedesignChanges(BaseModel):
@@ -503,6 +511,19 @@ class PageItem(BaseModel):
     body: str = Field(default="", max_length=1500)
 
 
+class DesignTokens(BaseModel):
+    model_config = CAMEL
+    background: str = Field(default="#fafbf7", pattern=r"^#[0-9a-fA-F]{6}$")
+    foreground: str = Field(default="#171c16", pattern=r"^#[0-9a-fA-F]{6}$")
+    surface: str = Field(default="#edf0e7", pattern=r"^#[0-9a-fA-F]{6}$")
+    accent: str = Field(default="#c6f135", pattern=r"^#[0-9a-fA-F]{6}$")
+    accent_text: str = Field(default="#171c16", alias="accentText", pattern=r"^#[0-9a-fA-F]{6}$")
+    typography: Literal["sans", "display", "editorial"] = "sans"
+    density: Literal["compact", "comfortable", "spacious"] = "comfortable"
+    width: Literal["standard", "wide"] = "standard"
+    corners: Literal["square", "soft", "round"] = "soft"
+
+
 class PageBlock(BaseModel):
     model_config = CAMEL
     id: str = Field(pattern=SECTION_ID_PATTERN)
@@ -510,7 +531,9 @@ class PageBlock(BaseModel):
     headline: str = Field(min_length=1, max_length=200)
     body: str = Field(default="", max_length=2000)
     cta_label: str = Field(default="Start creating", alias="ctaLabel", min_length=1, max_length=80)
-    layout: Literal["split", "centered", "media-first"] = "split"
+    layout: Literal["split", "centered", "media-first", "immersive", "collection"] = "split"
+    variant: Literal["standard", "cards", "editorial", "strip", "visual"] = "standard"
+    eyebrow: str = Field(default="", max_length=120)
     items: list[PageItem] = Field(default_factory=list, max_length=8)
     images: list[str] = Field(default_factory=list, max_length=4)
     video_source_section_id: str | None = Field(default=None, alias="videoSourceSectionId")
@@ -523,7 +546,7 @@ class PageBlock(BaseModel):
             raise ValueError("Features, workflow and FAQ blocks need at least two items")
         if self.kind == "faq" and any(not item.body.strip() for item in self.items):
             raise ValueError("FAQ questions need answers")
-        if self.kind == "hero" and len(self.images) > 1:
+        if self.kind == "hero" and self.layout != "collection" and len(self.images) > 1:
             raise ValueError("The hero has one image slot; use a gallery for multiple images")
         if self.images and self.kind not in {"hero", "gallery", "comparison", "features"}:
             raise ValueError("This block type does not render images")
@@ -532,14 +555,23 @@ class PageBlock(BaseModel):
 
 class PageBlueprint(BaseModel):
     model_config = CAMEL
-    schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
+    schema_version: Literal[1, 2] = Field(default=1, alias="schemaVersion")
     theme: Literal["clean-light", "warm-editorial", "dark-showcase"]
     art_direction: str = Field(alias="artDirection", min_length=1, max_length=1200)
     blocks: list[PageBlock] = Field(min_length=4, max_length=12)
     media: MediaPlan | None = None
+    tokens: DesignTokens | None = None
 
     @model_validator(mode="after")
     def structure(self):
+        if self.schema_version == 1 and (
+            self.tokens
+            or any(
+                b.layout in {"immersive", "collection"} or b.variant != "standard" or b.eyebrow
+                for b in self.blocks
+            )
+        ):
+            raise ValueError("Campaign design controls require schemaVersion 2")
         if self.blocks[0].kind != "hero" or self.blocks[-1].kind != "cta":
             raise ValueError("A page blueprint starts with a hero and ends with a CTA")
         if self.blocks[0].hidden or self.blocks[-1].hidden:
@@ -552,12 +584,14 @@ class PageBlueprint(BaseModel):
             raise ValueError("Heavy redesign needs at least two distinct body block types")
         if self.media:
             blocks_by_id = {block.id: block for block in self.blocks}
-            for asset in self.media.showcase:
+            for asset in self.media.showcase + self.media.sourced:
                 block = blocks_by_id.get(asset.group)
                 if block is None or block.kind not in {"hero", "gallery", "comparison", "features"}:
                     raise ValueError("An image plan must target a block that renders images")
-                if block.kind == "hero" and asset.slot != 0:
+                if block.kind == "hero" and block.layout != "collection" and asset.slot != 0:
                     raise ValueError("The hero has only image slot 0")
+                if isinstance(asset, SourcedImagePlan):
+                    continue
                 if not asset.art_direction:
                     asset.art_direction = self.art_direction
                 if not asset.intended_message:

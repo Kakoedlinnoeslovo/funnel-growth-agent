@@ -139,6 +139,7 @@ def create(workflow, *, base="v7", ids=None, adset=None):
     return workflow.create(
         {
             "baseVersion": base,
+            "changeLevel": "medium",  # Legacy editing fixtures explicitly retain their scope.
             "baseHash": baseline["hash"],
             "reportToken": catalog["reportToken"],
             "creativeIds": [] if adset else (ids or ["ad_1"]),
@@ -342,6 +343,7 @@ def test_upload_only_without_report_preserves_unknown_metrics_and_assets(workflo
     draft = workflow.create(
         {
             "baseVersion": "v7",
+            "changeLevel": "medium",
             "baseHash": catalog["baselines"][0]["hash"],
             "creativeIds": [uploaded["id"]],
         }
@@ -368,6 +370,7 @@ def test_uploads_mix_with_report_creatives_and_keep_report_validation(workflow):
     catalog = workflow.catalog()
     request = {
         "baseVersion": "v7",
+        "changeLevel": "medium",
         "baseHash": catalog["baselines"][0]["hash"],
         "creativeIds": [uploaded["id"], "ad_1"],
     }
@@ -578,6 +581,7 @@ def test_catalog_staleness_and_paths_are_checked(workflow):
     catalog = workflow.catalog()
     request = {
         "baseVersion": "v7",
+        "changeLevel": "medium",
         "baseHash": "stale",
         "reportToken": catalog["reportToken"],
         "creativeIds": ["ad_1"],
@@ -685,6 +689,7 @@ def test_http_workflow_api_and_origin_protection(workflow):
         assert code == 200 and len(catalog["adsets"]) == 2
         payload = {
             "baseVersion": "v7",
+            "changeLevel": "medium",
             "baseHash": catalog["baselines"][0]["hash"],
             "reportToken": catalog["reportToken"],
             "creativeIds": ["ad_tiny"],

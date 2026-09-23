@@ -60,7 +60,11 @@ def _library_url(url: str) -> str:
 class ResearchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
 
-    competitors: list[str] = Field(default_factory=lambda: list(COMPETITORS), max_length=5)
+    competitors: list[str] = Field(default_factory=list, max_length=5)
+    discovery: str = Field(default="auto", pattern="^(auto|manual)$")
+    excluded_domains: list[str] = Field(
+        default_factory=list, alias="excludedDomains", max_length=20
+    )
     country: str = "GB"
     ad_library_urls: list[str] = Field(default_factory=list, alias="adLibraryUrls", max_length=15)
     landing_urls: list[str] = Field(default_factory=list, alias="landingUrls", max_length=5)
@@ -70,9 +74,17 @@ class ResearchConfig(BaseModel):
     @classmethod
     def known_competitors(cls, values: list[str]) -> list[str]:
         values = list(dict.fromkeys(value.strip().lower() for value in values))
-        if any(value not in COMPETITORS for value in values):
-            raise ValueError("Unknown competitor identifier")
+        if any(not value or len(value) > 120 for value in values):
+            raise ValueError("Competitor names must contain 1–120 characters")
         return values
+
+    @field_validator("excluded_domains")
+    @classmethod
+    def domains(cls, values):
+        values = [v.strip().lower().removeprefix("www.") for v in values]
+        if any(not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}", v) for v in values):
+            raise ValueError("Use domain names such as example.com for exclusions")
+        return list(dict.fromkeys(values))
 
     @field_validator("country")
     @classmethod
@@ -300,6 +312,12 @@ def relevance_context(context: Any) -> dict:
         "visibleText",
         "productClaims",
         "ctaIntent",
+        "audience",
+        "promotedTask",
+        "outcome",
+        "conversionStep",
+        "constraints",
+        "goalPrompt",
     }
     texts: set[str] = set()
     creative_ids: set[str] = set()
@@ -307,7 +325,10 @@ def relevance_context(context: Any) -> dict:
     def visit(value: Any, *, field: str = "") -> None:
         if isinstance(value, dict):
             for key, child in value.items():
-                if key in {"creatives", "analyses", "analysis"} or key in text_fields:
+                if (
+                    key in {"creatives", "analyses", "analysis", "campaignBrief"}
+                    or key in text_fields
+                ):
                     visit(child, field=key)
                 elif key in {"id", "creativeId", "ad_id"} and field in {"creatives", "analyses"}:
                     creative_ids.add(str(child))
@@ -504,6 +525,7 @@ def research_competitors(
     reader: Any = None,
     on_event: Any = None,
     on_result: Any = None,
+    search_provider: Any = None,
 ) -> list[dict]:
     """Research bounded public journeys; publish each result as soon as it is available."""
     config = (
@@ -511,12 +533,27 @@ def research_competitors(
         if isinstance(config, ResearchConfig)
         else ResearchConfig.model_validate(config or {})
     )
+    if config.discovery == "auto" and isinstance(context, dict) and context.get("campaignBrief"):
+        from .campaign_research import research_campaign
+
+        return research_campaign(
+            settings,
+            config,
+            context,
+            provider=search_provider,
+            browser=browser,
+            reader=reader,
+            on_event=on_event,
+            on_result=on_result,
+        )
     context = relevance_context(context)
     browser = browser or GstackBrowser(find_browse_binary(settings))
     results: list[dict] = []
     cache_dir = settings.research_dir / "competitors"
     cache_dir.mkdir(parents=True, exist_ok=True)
     for key in config.competitors:
+        if key not in COMPETITORS:
+            continue  # Arbitrary products are discovered by the campaign search, not guessed domains.
         step = f"competitor:{key}"
         _emit(
             on_event,

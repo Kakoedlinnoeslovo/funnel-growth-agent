@@ -48,6 +48,7 @@ class Settings:
     github_public_origin: str | None = None
     github_build_environment: dict[str, str] = field(default_factory=dict)
     creative_paths: dict[str, dict[str, str]] = field(default_factory=dict)
+    web_assets: dict[str, dict] = field(default_factory=dict)
 
     @property
     def media_cache_dir(self) -> Path:

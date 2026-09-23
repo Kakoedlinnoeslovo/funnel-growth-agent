@@ -195,7 +195,14 @@ def _propose(
         policy = (
             {
                 key: brief_data[key]
-                for key in ("changeLevel", "previousProposal", "recipe")
+                for key in (
+                    "changeLevel",
+                    "previousProposal",
+                    "recipe",
+                    "campaignBrief",
+                    "campaignRebuild",
+                    "assetCatalog",
+                )
                 if key in brief_data
             }
             if isinstance(brief_data, dict)

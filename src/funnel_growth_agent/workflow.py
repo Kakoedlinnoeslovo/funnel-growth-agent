@@ -18,6 +18,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .apply import _tree_digest, apply_run, hard_diff_site, patch_site
+from .campaign import (
+    CampaignBrief,
+    CampaignDecision,
+    interpret_campaign,
+    research_fingerprint,
+    resolve_level,
+)
 from .competitor_research import ResearchConfig, research_competitors
 from .config import Settings
 from .gemini import analyze_ranked
@@ -60,7 +67,7 @@ def now() -> str:
 class CreateDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
     goalPrompt: str = Field(default="", max_length=8000)
-    changeLevel: Literal["light", "medium", "heavy"] = "medium"
+    changeLevel: Literal["auto", "light", "medium", "heavy"] = "auto"
     baseVersion: str
     baseHash: str
     reportToken: str | None = None
@@ -84,7 +91,9 @@ class RevisionRequest(BaseModel):
     instruction: str = Field(default="", max_length=8000)
     copy_changes: CopyChanges | None = Field(default=None, alias="copy")
     changes: ElementChanges | None = None
-    changeLevel: Literal["light", "medium", "heavy"] | None = None
+    changeLevel: Literal["auto", "light", "medium", "heavy"] | None = None
+    campaignBrief: CampaignBrief | None = None
+    editScope: Literal["copy", "local", "campaign"] | None = None
     expectedRevision: int = Field(ge=0)
 
     @model_validator(mode="after")
@@ -181,12 +190,20 @@ class Workflow(ConversationMixin):
         reader: Any = None,
         style_reader: Any = None,
         github: Any = None,
+        campaign_interpreter: Callable = interpret_campaign,
+        search_provider: Any = None,
+        asset_builder: Any = None,
+        campaign_reviewer: Any = None,
+        preview_capture: Any = None,
     ) -> None:
         self.settings = settings
         self.preview_base = preview_base.rstrip("/")
         self.root = settings.data_dir / "drafts"
         self.model, self.media_tools, self.validate = model, media_tools, validate
         self.chat_model = chat_model
+        self.campaign_interpreter, self.search_provider = campaign_interpreter, search_provider
+        self.asset_builder = asset_builder
+        self.campaign_reviewer, self.preview_capture = campaign_reviewer, preview_capture
         self.builder, self.publisher = builder, publisher
         self.analyzer, self.reviewer = analyzer, reviewer
         self.browser, self.reader, self.style_reader = browser, reader, style_reader
@@ -211,7 +228,9 @@ class Workflow(ConversationMixin):
                 conversation["status"] = "failed"
                 for message in conversation.get("messages", []):
                     if message.get("status") == "pending":
-                        message.update(status="failed", error="The reply was interrupted. Retry this message.")
+                        message.update(
+                            status="failed", error="The reply was interrupted. Retry this message."
+                        )
                 self.save(draft)
             if draft["status"] == "needs_selection":
                 draft.update(status="draft", error=None, selectionReview=None, retry=None)
@@ -226,7 +245,9 @@ class Workflow(ConversationMixin):
                         revision["status"] = "failed"
                         revision["error"] = draft["error"]
                 if draft.get("operationId"):
-                    self.snapshot_operation(draft, (draft.get("retry") or {}).get("action", "interrupted"))
+                    self.snapshot_operation(
+                        draft, (draft.get("retry") or {}).get("action", "interrupted")
+                    )
                 self.save(draft)
                 self._event(
                     draft,
@@ -672,6 +693,7 @@ class Workflow(ConversationMixin):
             pricing_lab_dir=lab,
             base_version=draft["baseVersion"],
             creative_paths=paths,
+            web_assets=(draft.get("context") or {}).get("assetCatalog", {}),
         )
 
     def start_job(self, draft_id: str, action: str, payload: dict | None = None) -> dict:
@@ -685,7 +707,12 @@ class Workflow(ConversationMixin):
             raise
 
     def _start_locked_job(
-        self, draft: dict, action: str, payload: dict | None = None, *, message_id: str | None = None
+        self,
+        draft: dict,
+        action: str,
+        payload: dict | None = None,
+        *,
+        message_id: str | None = None,
     ) -> dict:
         """Transfer the held job lock to a worker, including a conversational handoff."""
         draft_id = draft["id"]
@@ -728,11 +755,13 @@ class Workflow(ConversationMixin):
                 draft["status"] not in {"awaiting_direction", "failed"}
                 or payload.get("directionSetId") != ds.get("id")
                 or (draft.get("readyRevision") or 0) != ds.get("expectedRevision")
+                or (
+                    ds.get("campaignFingerprint")
+                    and ds["campaignFingerprint"] != research_fingerprint(draft)
+                )
             ):
                 raise ValueError("These design directions are stale; regenerate them")
-            choice = next(
-                (r for r in ds["records"] if r["id"] == payload.get("directionId")), None
-            )
+            choice = next((r for r in ds["records"] if r["id"] == payload.get("directionId")), None)
             if not choice:
                 raise ValueError("Choose one of the saved directions")
             payload = {
@@ -750,24 +779,16 @@ class Workflow(ConversationMixin):
             if not request.instruction.strip():
                 previous = draft["revisions"][draft["readyRevision"] - 1]["proposal"]
                 patch = (
-                    request.changes.model_dump(
-                        by_alias=True, exclude_unset=True, exclude_none=True
-                    )
+                    request.changes.model_dump(by_alias=True, exclude_unset=True, exclude_none=True)
                     if request.changes
-                    else {
-                        "copy": request.copy_changes.model_dump(
-                            by_alias=True, exclude_none=True
-                        )
-                    }
+                    else {"copy": request.copy_changes.model_dump(by_alias=True, exclude_none=True)}
                 )
                 from .models import PageBlueprint
 
                 merged = (
                     PageBlueprint.model_validate(patch["page"])
                     if patch.get("page")
-                    else RedesignChanges.model_validate(
-                        merge_changes(previous["changes"], patch)
-                    )
+                    else RedesignChanges.model_validate(merge_changes(previous["changes"], patch))
                 )
                 validate_landing_changes(
                     self.settings_for(draft, self.path(draft_id) / "base").landing_path, merged
@@ -822,7 +843,8 @@ class Workflow(ConversationMixin):
                 or (
                     "Research competitor ads and destinations"
                     if action == "research"
-                    else draft.get("goalPrompt") or "Turn the selected creatives into one Recraft landing"
+                    else draft.get("goalPrompt")
+                    or "Turn the selected creatives into one Recraft landing"
                 ),
                 "constraints": [
                     "Use the selected creatives and saved baseline",
@@ -888,6 +910,7 @@ class Workflow(ConversationMixin):
             "media": media_sources(settings, selected),
             "competitors": [],
             "complete": False,
+            "campaignFingerprint": research_fingerprint(draft),
         }
         self.save(draft)
 
@@ -899,13 +922,36 @@ class Workflow(ConversationMixin):
         research_competitors(
             settings,
             ResearchConfig.model_validate(draft.get("research") or {}),
-            {"analyses": draft.get("analyses", []), "creatives": draft["creatives"]},
+            {
+                "analyses": draft.get("analyses", []),
+                "creatives": draft["creatives"],
+                "campaignBrief": draft.get("campaignBrief"),
+                "goalPrompt": draft.get("goalPrompt"),
+            },
             browser=self.browser,
             reader=self.reader,
             on_event=lambda kind, data: self._event(draft, kind, {**data, "stage": "research"}),
             on_result=result,
+            search_provider=self.search_provider,
         )
         draft["context"]["complete"] = True
+        if draft.get("campaignBrief"):
+            from .web_assets import build_catalog
+
+            try:
+                draft["context"]["assetCatalog"] = (self.asset_builder or build_catalog)(
+                    settings,
+                    draft["campaignBrief"],
+                    draft["context"]["competitors"],
+                    on_event=lambda kind, data: self._event(draft, kind, data),
+                )
+            except Exception as error:
+                draft["context"]["assetCatalog"] = {}
+                self._event(
+                    draft,
+                    "asset_unavailable",
+                    {"label": "Web asset selection unavailable", "error": str(error)[:300]},
+                )
         self._event(
             draft,
             "step_completed",
@@ -936,6 +982,8 @@ class Workflow(ConversationMixin):
             item
             for item in draft["analyses"]
             if not refresh
+            and not (base_settings.gemini_api_key and (item.get("model") == "title-body-fallback" or
+                (item.get("analysis", {}).get("videoEvidence") or {}).get("concept") == "Video interpretation is unavailable."))
             and (
                 not next(
                     (c.video_path for c in selected if c.creative_id == item.get("creativeId")),
@@ -1073,12 +1121,73 @@ class Workflow(ConversationMixin):
         self.save(draft)
 
     def generate(self, draft: dict, payload: dict) -> None:
+        from .campaign_review import CampaignReviewError
+
+        for attempt in range(2):
+            try:
+                self._generate_campaign(draft, payload)
+                draft.pop("campaignCorrection", None)
+                return
+            except CampaignReviewError as error:
+                if draft["revisions"]:
+                    draft["revisions"][-1].update(status="failed", error=str(error))
+                if attempt:
+                    raise
+                draft["campaignCorrection"] = str(error)
+                self._event(
+                    draft,
+                    "campaign_correction",
+                    {"label": "Correcting campaign fit", "error": str(error)},
+                )
+
+    def _generate_campaign(self, draft: dict, payload: dict) -> None:
         folder = self.path(draft["id"])
         base_settings = self.settings_for(draft, folder / "base")
         self.analyze_selection(draft)
+        preference = payload.get("changeLevel") or draft.get("changeLevel", "medium")
+        if payload.get("campaignBrief"):
+            draft["campaignBrief"] = CampaignBrief.model_validate(
+                payload["campaignBrief"]
+            ).model_dump(by_alias=True)
+        if preference == "auto" and (
+            not draft.get("campaignBrief")
+            or (payload.get("instruction") and not payload.get("campaignBrief"))
+        ):
+            decision = CampaignDecision.model_validate(
+                self.campaign_interpreter(
+                    base_settings,
+                    {
+                        "goal": draft.get("goalPrompt"),
+                        "instruction": payload.get("instruction"),
+                        "campaignBrief": draft.get("campaignBrief"),
+                        "agreedBrief": draft.get("conversation", {}).get("agreedBrief"),
+                        "analyses": draft["analyses"],
+                        "landing": get_current_landing(base_settings),
+                    },
+                )
+            )
+            draft["campaignBrief"] = decision.campaignBrief.model_dump(by_alias=True)
+            draft["editScope"] = decision.editScope
+        scope = payload.get("editScope") or draft.get("editScope", "local")
+        if preference == "auto" and (payload.get("copy") or payload.get("changes")):
+            level = "light" if payload.get("copy") else "medium"
+        else:
+            level = resolve_level(draft, preference, scope)
+        if payload.get("instruction") and draft.get("campaignBrief"):
+            payload.update(campaignBrief=draft["campaignBrief"], editScope=scope)
+            if draft.get("retry"):
+                draft["retry"]["payload"] = payload
+        self.save(draft)
         selected = ranked_selection(draft["creatives"])
         analyses = [CachedCreativeAnalysis.model_validate(item) for item in draft["analyses"]]
-        if draft["context"] is None or draft["context"].get("complete") is False:
+        if (
+            draft["context"] is None
+            or draft["context"].get("complete") is False
+            or (
+                draft.get("campaignBrief")
+                and draft["context"].get("campaignFingerprint") != research_fingerprint(draft)
+            )
+        ):
             self.research_context(draft)
         else:
             self._event(
@@ -1091,9 +1200,9 @@ class Workflow(ConversationMixin):
                     "status": "cached",
                 },
             )
-        level = payload.get("changeLevel") or draft.get("changeLevel", "medium")
         if (
             level == "heavy"
+            and preference != "auto"
             and not payload.get("selectedProposal")
             and not payload.get("changes")
             and not payload.get("copy")
@@ -1115,7 +1224,11 @@ class Workflow(ConversationMixin):
             if payload.get("selectedProposal")
             else None
         )
-        if failed_attempt and failed_attempt["proposal"]["decision"] == "experiment":
+        if (
+            failed_attempt
+            and not draft.get("campaignCorrection")
+            and failed_attempt["proposal"]["decision"] == "experiment"
+        ):
             candidate = SavedProposal.model_validate(failed_attempt["proposal"])
             try:
                 validate_landing_changes(base_settings.landing_path, candidate.changes)
@@ -1128,7 +1241,10 @@ class Workflow(ConversationMixin):
             "createdAt": now(),
             "input": payload,
             "goalPrompt": draft.get("goalPrompt", ""),
-            "changeLevel": payload.get("changeLevel") or draft.get("changeLevel", "medium"),
+            "changeLevel": level,
+            "changePreference": preference,
+            "campaignBrief": draft.get("campaignBrief"),
+            "campaignFingerprint": research_fingerprint(draft),
             "analyses": json.loads(json.dumps(draft["analyses"])),
             "status": "generating",
             "proposal": None,
@@ -1199,6 +1315,10 @@ class Workflow(ConversationMixin):
                 "task": "Generate one complete creative-matched landing redesign from the selected baseline.",
                 "goalPrompt": draft.get("goalPrompt", ""),
                 "changeLevel": revision["changeLevel"],
+                "campaignBrief": draft.get("campaignBrief"),
+                "campaignRebuild": preference == "auto" and level == "heavy",
+                "assetCatalog": (draft.get("context") or {}).get("assetCatalog", {}),
+                "campaignCorrection": draft.get("campaignCorrection"),
                 "selection": [item.model_dump(by_alias=True) for item in selected],
                 "observedMetrics": {row["id"]: row["metrics"] for row in draft["creatives"]},
                 "selectionReview": draft["selectionReview"],
@@ -1283,6 +1403,32 @@ class Workflow(ConversationMixin):
         self.save(draft)
         if saved.decision != "experiment":
             raise ValueError(saved.reason or "The requested landing could not be generated")
+        review_context = None
+        if (
+            saved.changes
+            and getattr(saved.changes, "schema_version", 1) == 2
+            and draft.get("campaignBrief")
+        ):
+            from .campaign_review import CampaignReview, review_campaign
+
+            review_context = {
+                "campaignBrief": draft["campaignBrief"],
+                "scope": level,
+                "baseline": get_current_landing(base_settings),
+                "previousProposal": previous,
+                "proposal": revision["proposal"],
+                "assetCatalog": settings.web_assets,
+                "sources": [
+                    {k: r.get(k) for k in ("url", "sourceKind", "pageText", "read")}
+                    for r in (draft.get("context") or {}).get("competitors", [])
+                ],
+            }
+            review = CampaignReview.model_validate(
+                (self.campaign_reviewer or review_campaign)(settings, review_context)
+            )
+            revision["campaignReview"] = review.model_dump(by_alias=True)
+            self.save(draft)
+            review.require_pass()
         self._event(
             draft,
             "step_started",
@@ -1356,10 +1502,28 @@ class Workflow(ConversationMixin):
             {"draftId": draft["id"], "revision": revision["number"], "variant": draft["variant"]},
             draft["buildEnvironment"],
         )
+        if review_context is not None:
+            from .campaign_review import CampaignReview, capture_preview, review_campaign
+
+            shots, observations = (self.preview_capture or capture_preview)(
+                settings,
+                self.previews.url(dist, draft["variant"]),
+                lab.parent / "review",
+                browser=self.browser,
+            )
+            review = CampaignReview.model_validate(
+                (self.campaign_reviewer or review_campaign)(
+                    settings, {**review_context, "renderedObservations": observations}, images=shots
+                )
+            )
+            revision["renderedReview"] = review.model_dump(by_alias=True)
+            revision["reviewScreenshots"] = [str(p) for p in shots]
+            self.save(draft)
+            review.require_pass()
         revision["artifact"] = json.loads((dist / MARKER).read_text())
         revision["sourceHash"] = _tree_digest(lab / "funnels" / draft["variant"])
         revision["status"] = "ready"
-        draft["changeLevel"] = revision["changeLevel"]
+        draft["changeLevel"] = preference
         draft.pop("directionSet", None)
         draft["readyRevision"] = revision["number"]
         draft["status"] = "ready"
