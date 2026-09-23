@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import re
@@ -109,6 +110,17 @@ def build_preview(lab: Path, identity: dict, environment: dict[str, str]) -> Pat
     return dist
 
 
+def preview_html(body: bytes) -> bytes:
+    # A server-injected marker cannot be activated by a production query parameter.
+    if b'data-growth-preview="true"' in body:
+        return body
+    body = re.sub(
+        rb"<html(?=[\s>])", b'<html data-growth-preview="true"', body, count=1, flags=re.I
+    )
+    guard = b"<script>document.addEventListener('click',function(e){var a=e.target.closest&&e.target.closest('a[href]');if(a&&new URL(a.href,location.href).origin!==location.origin)e.preventDefault()},true);document.addEventListener('submit',function(e){e.preventDefault()},true);</script>"
+    return body.replace(b"</head>", guard + b"</head>", 1)
+
+
 class PreviewHandler(SimpleHTTPRequestHandler):
     def log_message(self, *_args: object) -> None:
         pass
@@ -117,10 +129,21 @@ class PreviewHandler(SimpleHTTPRequestHandler):
         # Local review must not send advertising/analytics events or initiate checkout.
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self' data: blob:; img-src 'self' data: blob: https://cdn.prod.website-files.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; form-action 'none'; frame-src 'none'; object-src 'none'",
+            "default-src 'self' data: blob:; img-src 'self' data: blob: https://cdn.prod.website-files.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; form-action 'none'; frame-src 'none'; object-src 'none'",
         )
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
+
+    def send_head(self):
+        target = Path(self.translate_path(self.path))
+        if target.name == "index.html" and target.is_file():
+            body = preview_html(target.read_bytes())
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            return io.BytesIO(body)
+        return super().send_head()
 
     def translate_path(self, path: str) -> str:
         root = Path(self.directory).resolve()
@@ -193,14 +216,24 @@ class DevPreviewHandler(PreviewHandler):
 
         try:
             # The destination is fixed by the local console, never by a request parameter.
-            response = httpx.get(self.upstream + self.path, timeout=20, follow_redirects=False)
+            target = (
+                "https://api.recraft.ai/products"
+                if urlsplit(self.path).path == "/preview-products.json"
+                else self.upstream + self.path
+            )
+            response = httpx.get(target, timeout=20, follow_redirects=False)
+            body = (
+                preview_html(response.content)
+                if "text/html" in response.headers.get("content-type", "")
+                else response.content
+            )
             self.send_response(response.status_code)
             self.send_header(
                 "Content-Type", response.headers.get("content-type", "application/octet-stream")
             )
-            self.send_header("Content-Length", str(len(response.content)))
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(response.content)
+            self.wfile.write(body)
         except httpx.HTTPError:
             self.send_error(503, "Start the pricing-lab dev server to preview a baseline")
 

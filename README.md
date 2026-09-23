@@ -1,6 +1,23 @@
 # funnel-growth-agent
 
-## Creative → landing workflow
+## Any-step funnel workspace
+
+```bash
+uv run funnel-growth demo --live --open
+```
+
+Paste a page URL or choose a funnel from the library. Select any step, inspect its exact
+PostHog evidence, and describe a goal. The dark workspace includes a step navigator,
+step-specific conversations, a copy editor, and cumulative whole-funnel previews.
+**Publish new funnel** includes every accepted step change and preserves the current default.
+Unknown public URLs are captured into editable, inactive library replicas; **Replace step**
+adapts the composition to an existing step while retaining its native interactions and offers.
+
+The companion renderer needs `funnel-steps-v1`; exact analytics needs the new read-only
+`growth-loop funnel-metrics` command. See [setup, contracts, and verification](docs/any-step-funnel.md).
+Older saved landing drafts and CLI workflows remain supported as described below.
+
+## Legacy creative → landing workflow
 
 ```bash
 uv run funnel-growth demo --live --open
@@ -15,7 +32,7 @@ Start with a baseline and describe your goal, select creatives, or combine both.
 without creatives or a weekly report. Choose **Light**, **Medium** (default), or **Heavy**.
 Light refines copy while preserving the current design; Medium changes supported layouts,
 section order/visibility and media; Heavy presents three compositions before generating the
-selected page. The measured objective stays **landing-to-CTA conversion**.
+selected page. For legacy landing-only drafts, the measured objective stays **landing-to-CTA conversion**.
 
 Ask a question to discuss the current page without generating a revision. A clear request such
 as “simplify the hero” starts the existing validated workflow at the selected change level.
@@ -69,7 +86,7 @@ The shared renderer must be installed in the pricing lab before making a Heavy d
 publishing also checks the target deployment branch for `growth-blocks-v1`; deploy that shared
 renderer separately before publishing a generated Heavy version. Generated-version commits
 do not include shared runtime changes. Offer, quiz answer identities, checkout and attribution
-contracts remain protected. Custom React-only baselines remain unsupported.
+contracts remain protected. Legacy landing-only generation does not support custom React-only baselines; the any-step workspace uses the native step adapters.
 
 Competitor evidence records section order, hero composition, typography, spacing, proof and
 CTA placement, plus mobile differences. Proposals explain observed pattern → fit → Recraft

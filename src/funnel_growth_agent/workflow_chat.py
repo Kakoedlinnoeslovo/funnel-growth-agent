@@ -22,6 +22,7 @@ class ChatRequest(BaseModel):
     expectedRevision: int = Field(ge=0)
     changeLevel: Literal["auto", "light", "medium", "heavy"] = "auto"
     retryFailed: bool = False
+    stepId: str | None = None
 
 
 class ChatDecision(BaseModel):
@@ -163,12 +164,18 @@ class ConversationMixin:
                 base_version=draft["variant"],
             )
         return {
-            "goal": draft.get("goalPrompt", ""),
-            "agreedBrief": draft.get("conversation", {}).get("agreedBrief", ""),
+            "goal": self.step_state(draft).get("goal", "")
+            if draft.get("funnelMode")
+            else draft.get("goalPrompt", ""),
+            "agreedBrief": self.step_state(draft).get("agreedBrief", "")
+            if draft.get("funnelMode")
+            else draft.get("conversation", {}).get("agreedBrief", ""),
             "changeLevel": request.changeLevel,
             "campaignBrief": draft.get("campaignBrief"),
             "status": draft["status"],
-            "landing": get_current_landing(settings),
+            "landing": self.step_context(draft, request.text, request.changeLevel)
+            if draft.get("funnelMode")
+            else get_current_landing(settings),
             "brief": (revision.get("proposal") or {}).get("interpretedBrief"),
             "changes": revision.get("changeSummary", []),
             "creatives": [
@@ -189,13 +196,17 @@ class ConversationMixin:
             "messages": [
                 {"role": m["role"], "text": m["text"]}
                 for m in draft["conversation"]["messages"][-41:]
-                if m.get("text") and m.get("status") != "failed"
+                if m.get("text")
+                and m.get("status") != "failed"
+                and (not draft.get("funnelMode") or m.get("stepId") == draft["activeStepId"])
             ],
         }
 
     def start_message(self, draft_id: str, raw: dict) -> dict:
         request = ChatRequest.model_validate(raw)
         fingerprint = request.model_dump(exclude={"retryFailed"})
+        if request.stepId is None:
+            fingerprint.pop("stepId", None)
         # Duplicate retries can acknowledge a running request without acquiring its job lock.
         with self.store_lock:
             draft = self.load(draft_id)
@@ -224,6 +235,8 @@ class ConversationMixin:
                     "Another operation is running; your message can be sent when it finishes"
                 )
             try:
+                if draft.get("funnelMode") and request.stepId != draft["activeStepId"]:
+                    raise ValueError("The selected step changed. Reload before sending.")
                 if request.expectedRevision != (draft.get("readyRevision") or 0):
                     raise ValueError(
                         "The draft has a newer revision. Review it before sending this message."
@@ -241,12 +254,14 @@ class ConversationMixin:
                             "at": stamp(),
                             "status": "completed",
                             "request": fingerprint,
+                            "stepId": request.stepId,
                         }
                     )
                     reply = {
                         "id": uuid.uuid4().hex,
                         "role": "assistant",
                         "replyTo": request.requestId,
+                        "stepId": request.stepId,
                         "at": stamp(),
                         "text": "",
                         "status": "pending",
@@ -275,6 +290,8 @@ class ConversationMixin:
             reply.update(text=decision.text, status="completed", action=decision.action)
             if decision.agreedBrief:
                 conversation["agreedBrief"] = decision.agreedBrief
+                if draft.get("funnelMode"):
+                    self.step_state(draft)["agreedBrief"] = decision.agreedBrief
             if decision.campaignBrief:
                 draft["campaignBrief"] = decision.campaignBrief.model_dump(by_alias=True)
                 draft["campaignBriefOrigin"] = "conversation"
@@ -292,6 +309,7 @@ class ConversationMixin:
                     draft,
                     action,
                     {
+                        **({"stepId": request.stepId} if draft.get("funnelMode") else {}),
                         "instruction": decision.instruction,
                         "expectedRevision": request.expectedRevision,
                         "changeLevel": request.changeLevel,
@@ -325,6 +343,7 @@ class ConversationMixin:
                     {
                         "id": draft.get("operationId"),
                         "action": action,
+                        "stepId": draft.get("activeStepId"),
                         "at": stamp(),
                         "status": draft["status"],
                         "revision": draft.get("readyRevision"),

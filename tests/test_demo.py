@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import threading
+import types
 from importlib import resources
 from pathlib import Path
 
@@ -396,3 +397,72 @@ def test_console_preflight_rechecks_the_lab_dev_server_on_state_requests(
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_preview_base_reaches_the_server_from_the_command_line(settings, monkeypatch) -> None:
+    """The documented setup points the workspace at a lab dev server on a chosen port.
+    That only works if --preview-base survives the whole call chain."""
+    from typer.testing import CliRunner
+
+    from funnel_growth_agent import cli
+    from funnel_growth_agent.demo import server as server_module
+
+    seen: dict[str, object] = {}
+
+    class StubServer:
+        server_address = ("127.0.0.1", 0)
+
+        def __init__(self) -> None:
+            self.state = types.SimpleNamespace(mode="live", preflight=[])
+
+        def serve_forever(self) -> None:
+            raise KeyboardInterrupt
+
+        def server_close(self) -> None:
+            seen["closed"] = True
+
+    def stub_make_server(_settings, **kwargs):
+        seen.update(kwargs)
+        return StubServer()
+
+    monkeypatch.setattr(server_module, "make_server", stub_make_server)
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["demo", "--live", "--preview-base", "http://127.0.0.1:5187/pm", "--port", "8817"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen["preview_base"] == "http://127.0.0.1:5187/pm"
+    assert seen["port"] == 8817
+    assert seen["live"] is True
+    assert seen["closed"] is True
+
+
+def test_preview_base_defaults_when_the_flag_is_absent(settings, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    from funnel_growth_agent import cli
+    from funnel_growth_agent.demo import server as server_module
+
+    seen: dict[str, object] = {}
+
+    class StubServer:
+        server_address = ("127.0.0.1", 0)
+        state = types.SimpleNamespace(mode="live", preflight=[])
+
+        def serve_forever(self) -> None:
+            raise KeyboardInterrupt
+
+        def server_close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        server_module, "make_server", lambda _s, **kwargs: (seen.update(kwargs), StubServer())[1]
+    )
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+
+    result = CliRunner().invoke(cli.app, ["demo", "--live"])
+    assert result.exit_code == 0, result.output
+    assert seen["preview_base"] == server_module.PREVIEW_BASE

@@ -386,6 +386,9 @@ def demo(
     live: bool = typer.Option(False, "--live", help="Open the creative-to-landing draft workflow."),
     port: int = typer.Option(8765, "--port"),
     speed: float = typer.Option(1.0, "--speed", help="Replay pacing multiplier."),
+    preview_base: str | None = typer.Option(
+        None, "--preview-base", help="Where the lab dev server serves funnels, e.g. http://127.0.0.1:5187/pm."
+    ),
     open_browser: bool = typer.Option(False, "--open"),
     verbose: bool = typer.Option(False, "--verbose"),
 ) -> None:
@@ -393,7 +396,7 @@ def demo(
     if ctx.invoked_subcommand is not None:
         return
     from .demo.events import resolve_recording
-    from .demo.server import serve
+    from .demo.server import PREVIEW_BASE, serve
 
     settings = _settings()
     try:
@@ -407,6 +410,7 @@ def demo(
         live=live,
         port=port,
         speed=speed,
+        preview_base=preview_base or PREVIEW_BASE,
         open_browser=open_browser,
         verbose=verbose,
     )

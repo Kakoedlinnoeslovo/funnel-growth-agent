@@ -312,6 +312,9 @@ def relevance_context(context: Any) -> dict:
         "visibleText",
         "productClaims",
         "ctaIntent",
+        "goal",
+        "component",
+        "primaryMetric",
         "audience",
         "promotedTask",
         "outcome",
@@ -326,7 +329,15 @@ def relevance_context(context: Any) -> dict:
         if isinstance(value, dict):
             for key, child in value.items():
                 if (
-                    key in {"creatives", "analyses", "analysis", "campaignBrief"}
+                    key
+                    in {
+                        "creatives",
+                        "analyses",
+                        "analysis",
+                        "campaignBrief",
+                        "selectedStep",
+                        "step",
+                    }
                     or key in text_fields
                 ):
                     visit(child, field=key)

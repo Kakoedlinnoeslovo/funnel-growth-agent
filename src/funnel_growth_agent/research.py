@@ -79,6 +79,8 @@ class LandingPatternRead(BaseModel):
     people_shown: bool | None = Field(default=None, alias="peopleShown")
     below_fold_sections: list[str] = Field(default_factory=list, alias="belowFoldSections")
 
+    # Every free-text observation list: models answer these in prose often enough that a
+    # single string used to fail the whole read and drop that reference from the evidence.
     @field_validator(
         "imagery_style",
         "first_screen_sections",

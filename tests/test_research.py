@@ -98,6 +98,10 @@ def test_pattern_read_keeps_prose_observations_instead_of_failing() -> None:
         "Live editor preview",
         "Pricing anchored to a free tier",
     ]
+    # Lists still pass through untouched.
+    assert LandingPatternRead.model_validate(
+        {"typography": ["Serif display", "Mono captions"]}
+    ).typography == ["Serif display", "Mono captions"]
 
 
 def test_research_without_gemini_key_returns_error_not_exception(settings) -> None:

@@ -7,6 +7,11 @@ const el = (tag, className = '', text) => {
 };
 const labels = {draft:'Draft',awaiting_direction:'Choose a direction',generating:'Generating',researching:'Researching',revising:'Revising',ready:'Ready',publishing:'Publishing',published:'Published',failed:'Needs attention',needs_selection:'Draft'};
 const stageLabels = {understand:'Understanding creatives',research:'Researching references',design:'Designing the page',assets:'Creating assets',build:'Building & checking',publish:'Preparing publication'};
+const stageOrder = ['understand','research','design','assets','build','publish'];
+// What each action is expected to run, so the rail can show the stages still ahead. Stages that
+// actually ran are always shown too: the plan narrows the guess, it never hides real work.
+const stagePlans = {generate:['understand','research','design','assets','build'],revise:['understand','research','design','assets','build'],select_direction:['design','assets','build'],research:['research'],reanalyze:['understand'],prepare_publish:['build','publish'],publish:['publish']};
+const toolLabels = {get_landing_cta_metrics:'Reading landing CTA metrics',get_current_landing:'Reading the current page',get_previous_runs:'Reviewing previous runs',get_top_creatives:'Reading the top creatives',get_creative_analysis:'Reading a creative analysis',get_media_sources:'Listing media sources',research_landing:'Researching a reference page',get_showcase_style:'Reading the showcase style',get_visual_landscape:'Reading the visual landscape',submit_proposal:'Writing the proposal'};
 const operationStates = new Set(['generating','researching','revising','publishing']);
 const PAGE_SIZE = 6;
 let catalog = null, active = null, busy = false, uploading = false, sending = false, selected = new Set();
@@ -46,12 +51,17 @@ async function api(path,data) {
   if (!response.ok) { const failure = new Error(result.error || 'The request could not be completed.'); failure.status = response.status; throw failure; } return result;
 }
 function remember(id) { try { if (id) localStorage.setItem('creative-landing-draft',id); else localStorage.removeItem('creative-landing-draft'); } catch {} history.replaceState(null,'',id ? '/?draft=' + id : '/'); }
-function cacheInput() { try { sessionStorage.setItem('growth-input-' + (active?.id || 'new'),$('goal-prompt').value); } catch {} }
-function restoreInput() { try { $('goal-prompt').value = sessionStorage.getItem('growth-input-' + (active?.id || 'new')) || ''; } catch { $('goal-prompt').value = ''; } }
+function cacheInput() { try { sessionStorage.setItem('growth-input-' + (active?.id ? active.id + ':' + (active.activeStepId || 'landing') : 'new'),$('goal-prompt').value); } catch {} }
+function restoreInput() { try { $('goal-prompt').value = sessionStorage.getItem('growth-input-' + (active?.id ? active.id + ':' + (active.activeStepId || 'landing') : 'new')) || ''; } catch { $('goal-prompt').value = ''; } }
 function rememberView() { cacheInput(); savedViews.set(active?.id || 'new',{scroll:$('chat-scroll').scrollTop,comparison,previewRevision,viewport,mobileTab}); }
 function button(text,fn,className = 'small-button') { const node = el('button',className,text); node.type = 'button'; node.onclick = fn; return node; }
 function guarded(fn) { return () => Promise.resolve().then(fn).catch(e => error(e.message)); }
 function hostLabel(url) { try { return new URL(url).hostname.replace(/^www\./,''); } catch { return 'Reference'; } }
+function changeText(entry) {
+  if (typeof entry === 'string') return entry;
+  if (!entry || typeof entry !== 'object') return '';
+  return [entry.label,entry.detail].filter(Boolean).join(' — ') || entry.summary || '';
+}
 function firstSentence(text,max = 150) { const value = String(text || '').trim(); const first = value.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() || value; return first.length > max ? first.slice(0,max).replace(/\s+\S*$/,'') + '…' : first; }
 function fact(host,title,value) { if (!value?.length) return; const row = el('div','labeled-fact'); row.append(el('span','',title),el('p','',Array.isArray(value) ? value.join(' · ') : value)); host.append(row); }
 function disclosure(title,render,subtext = '') {
@@ -243,7 +253,7 @@ function videoCard(record,item) {
 function changesCard(record) {
   return disclosure('What changed',body => {
     const proposal = record.proposal || {}, brief = proposal.interpretedBrief;
-    for (const change of record.changes || []) body.append(el('p','',change));
+    for (const change of record.changes || []) { const text = changeText(change); if (text) body.append(el('p','',text)); }
     if (brief) { fact(body,'Audience',brief.audience); fact(body,'Promise',brief.promise); fact(body,'Design direction',brief.designDirection); fact(body,'Objections',brief.objections); }
     fact(body,'Problem observed',proposal.problem); fact(body,'Hypothesis · to be measured',proposal.hypothesis);
     if (proposal.evidence?.length) { body.append(el('h3','','Supporting evidence')); progressive(body,proposal.evidence,row => el('p','',typeof row === 'string' ? row : row.summary || JSON.stringify(row))); }
@@ -302,35 +312,159 @@ function messageNode(message) {
   }
   return row;
 }
+function humanMs(ms) { const seconds = Math.round(ms / 1000); return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`; }
+// Pair tool_call with its tool_result by shared id, so the feed can name the tool running now.
+function toolRuns(events) {
+  const runs = new Map();
+  for (const event of events) {
+    const data = event.data || {}, key = data.id;
+    if (!key) continue;
+    if (event.kind === 'tool_call') runs.set(key,{name:data.name,input:data.input,at:event.at,done:false,failed:false});
+    else if (event.kind === 'tool_result' && runs.has(key)) Object.assign(runs.get(key),{done:true,endedAt:event.at,failed:!!data.result?.error});
+  }
+  return [...runs.values()];
+}
+function toolDetail(input) {
+  if (!input || typeof input !== 'object') return '';
+  for (const key of ['url','query','variant','stem','adId','id','name']) {
+    const value = input[key];
+    if (typeof value !== 'string' || !value) continue;
+    return /^https?:\/\//.test(value) ? hostLabel(value) : value.length > 48 ? value.slice(0,48) + '…' : value;
+  }
+  return '';
+}
+// Artifacts the backend already resolved to /api/assets URLs. Anything else is ignored.
+// Research attaches its captures nested under the saved record, so this walks the event data
+// rather than reading fixed top-level keys.
+const VISUAL_KEYS = new Set(['imageUrl','imagePath','image','path','screenshot','thumb','poster','chosenPath','videoPath']);
+function eventVisuals(events) {
+  const out = [], seen = new Set();
+  const add = (value,caption,kind) => { const safe = assetUrl(value); if (!safe || seen.has(safe)) return; seen.add(safe); out.push({url:safe,caption,kind}); };
+  const walk = (value,caption,depth) => {
+    if (depth > 6 || !value || typeof value !== 'object') return;
+    if (Array.isArray(value)) { for (const item of value) walk(item,caption,depth + 1); return; }
+    const label = typeof value.label === 'string' && value.label ? value.label : caption;
+    for (const [key,item] of Object.entries(value)) {
+      if (typeof item === 'string') { if (VISUAL_KEYS.has(key)) add(item,label,key === 'videoPath' ? 'video' : 'image'); }
+      else if (Array.isArray(item) && (key === 'screenshots' || key === 'candidates')) {
+        const suffix = key === 'candidates' ? ' · candidate' : '';
+        for (const shot of item) typeof shot === 'string' ? add(shot,label + suffix,'image') : walk(shot,label + suffix,depth + 1);
+      } else walk(item,label,depth + 1);
+    }
+  };
+  for (const event of events) {
+    const data = event.data || {};
+    walk(data,data.label || {tile_candidate:'Image candidate',tile_judged:'Chosen image'}[event.kind] || stageLabels[event.stage] || 'Work in progress',0);
+  }
+  return out;
+}
+
+function renderVisualStrip(host,shots) {
+  const signature = shots.map(shot => shot.url).join('|');
+  if (host.dataset.signature === signature) return;
+  host.dataset.signature = signature;
+  host.replaceChildren();
+  if (!shots.length) return;
+  for (const shot of shots) {
+    const figure = el('figure','visual-item');
+    if (shot.kind === 'video') { const video = el('video'); video.src = shot.url; video.controls = true; video.muted = true; video.playsInline = true; video.preload = 'metadata'; figure.append(video); }
+    else { const image = imageNode(shot.url,shot.caption); if (!image) continue; const anchor = link('',shot.url,'visual-open'); if (anchor.tagName === 'A') { anchor.append(image); anchor.setAttribute('aria-label','Open ' + shot.caption + ' full size'); figure.append(anchor); } else figure.append(image); }
+    figure.append(el('figcaption','',shot.caption));
+    host.append(figure);
+  }
+}
+function renderToolLog(host,events) {
+  const runs = toolRuns(events);
+  host.replaceChildren();
+  if (!runs.length) return;
+  const running = runs.filter(run => !run.done), finished = runs.filter(run => run.done);
+  for (const run of running) {
+    const row = el('p','tool-row'), detail = toolDetail(run.input);
+    row.dataset.state = 'running'; row.setAttribute('role','status');
+    row.append(el('span','tool-mark','▸'),el('span','',(toolLabels[run.name] || run.name) + (detail ? ' · ' + detail : '')));
+    host.append(row);
+  }
+  if (finished.length) {
+    const summary = el('p','tool-row'); summary.dataset.state = 'done';
+    const failed = finished.filter(run => run.failed).length;
+    summary.append(el('span','tool-mark','✓'),el('span','',`${finished.length} ${finished.length === 1 ? 'tool call' : 'tool calls'} finished${failed ? ` · ${failed} could not complete` : ''}`));
+    host.append(summary);
+  }
+}
+// Median of this draft's own completed runs of the same action. Never an invented estimate:
+// with fewer than two observed runs the rail shows no expectation at all.
+function typicalRun(action) {
+  const started = new Map(), samples = [];
+  for (const event of active?.events || []) {
+    const data = event.data || {};
+    if (data.action !== action) continue;
+    if (event.kind === 'operation_started') started.set(event.operationId,Date.parse(event.at));
+    else if (event.kind === 'operation_completed' && started.has(event.operationId)) {
+      const span = Date.parse(event.at) - started.get(event.operationId); started.delete(event.operationId);
+      if (span > 0) samples.push(span);
+    }
+  }
+  if (samples.length < 2) return null;
+  samples.sort((a,b) => a - b);
+  return {median:samples[Math.floor(samples.length / 2)],count:samples.length};
+}
+function renderStageRail(host,events,terminal) {
+  const action = events.find(event => event.kind === 'operation_started')?.data?.action;
+  const seen = []; for (const event of events) if (stageOrder.includes(event.stage) && !seen.includes(event.stage)) seen.push(event.stage);
+  const planned = stagePlans[action] || [];
+  const stages = stageOrder.filter(stage => planned.includes(stage) || seen.includes(stage));
+  host.replaceChildren();
+  if (!stages.length) return null;
+  const current = terminal ? null : seen.at(-1);
+  const index = current ? Math.max(0,stages.indexOf(current)) : stages.length;
+  host.setAttribute('aria-label','Run progress');
+  stages.forEach((stage,position) => {
+    const item = el('li','stage-step'), done = position < index, isCurrent = position === index;
+    item.dataset.state = done ? 'done' : isCurrent ? 'current' : 'pending';
+    if (isCurrent) item.setAttribute('aria-current','step');
+    item.append(el('span','stage-mark',done ? '✓' : isCurrent ? '●' : '○'),el('span','',stageLabels[stage] || stage));
+    host.append(item);
+  });
+  const typical = typicalRun(action);
+  return `stage ${Math.min(index + 1,stages.length)} of ${stages.length}` + (typical ? ` · past runs here took about ${humanMs(typical.median)} (${typical.count} observed)` : '');
+}
 function operationNode(id,record,events,legacy = false) {
   let node = feedNodes.get('operation-' + id);
   if (!node) {
     node = el('article','chat-message assistant' + (legacy ? ' legacy' : '')); node.dataset.operationId = id;
     node.append(el('div','message-label',legacy ? 'Saved activity · before chat' : '✳  Growth agent'));
-    node.heading = el('h3'); node.progress = el('div','progress-line'); node.summary = el('ul','change-list'); node.links = el('div','result-links'); node.cards = el('div');
-    node.append(node.heading,node.progress,node.summary,node.links,node.cards); feedNodes.set('operation-' + id,node);
+    node.heading = el('h3'); node.progress = el('div','progress-line'); node.rail = el('ol','stage-rail'); node.tools = el('div','tool-log'); node.visuals = el('div','visual-strip'); node.summary = el('ul','change-list'); node.links = el('div','result-links'); node.cards = el('div');
+    node.append(node.heading,node.progress,node.rail,node.tools,node.visuals,node.summary,node.links,node.cards); feedNodes.set('operation-' + id,node);
   }
   const last = events.at(-1), terminal = record || ['operation_completed','operation_failed'].includes(last?.kind);
   if (record && !node.completed) {
-    node.completed = true; node.progress.replaceChildren();
+    node.completed = true; node.progress.replaceChildren(); node.rail.replaceChildren(); node.tools.replaceChildren(); node.visuals.replaceChildren();
     const generated = ['generate','revise','select_direction','prepare_publish'].includes(record.action);
     node.heading.textContent = legacy ? `Saved ${active.variant}${record.revision ? ' · revision ' + record.revision : ''}` : record.status === 'failed' ? 'This operation needs attention' : record.status === 'awaiting_direction' ? 'Three directions to explore' : generated && record.revision ? `Revision ${record.revision} ready` : record.action === 'research' ? 'Research updated' : record.action === 'reanalyze' ? 'Video evidence updated' : record.action === 'publish' ? 'Publication updated' : 'Saved activity';
     if (record.error) node.progress.append(el('p','warning',friendlyError(record.error)));
     if (legacy) node.progress.append(el('p','small muted','This draft predates chat. These are its saved results, not a reconstructed conversation.'));
     const succeeded = record.status === 'ready' || record.status === 'published';
-    if ((generated && succeeded) || legacy) for (const text of (record.changes || []).slice(0,3)) node.summary.append(el('li','',firstSentence(text,180)));
+    if ((generated && succeeded) || legacy) for (const entry of (record.changes || []).slice(0,3)) { const text = changeText(entry); if (text) node.summary.append(el('li','',firstSentence(text,180))); }
     if (record.revision) node.links.append(button((record.status === 'failed' ? 'Last ready revision ' : 'View revision ') + record.revision,() => viewRevision(record.revision),'text-button'));
     if (record.status === 'awaiting_direction') { const explore = button('Explore directions →',() => { if (active.status !== 'awaiting_direction' || active.operationId !== id) return; resultsMode = 'directions'; renderPreview(); setWorkspaceTab('preview'); },'text-button'); explore.dataset.directionOperation = id; node.links.append(explore); }
     if (((generated && succeeded) || legacy) && record.proposal) node.cards.append(changesCard(record));
     if (record.context?.competitors?.length || record.action === 'research' || legacy) node.cards.append(researchCard(record));
     for (const item of record.analyses || []) if (item.analysis?.videoEvidence) node.cards.append(videoCard(record,item));
     if (record.audience || (legacy && active.audience)) { const audience = record.audience || active.audience; node.cards.append(disclosure('Audience evidence',body => renderAudienceEvidence(body,audience))); }
+    const shots = eventVisuals(events);
+    if (shots.length) node.cards.append(disclosure('Steps along the way',body => { const strip = el('div','visual-strip'); renderVisualStrip(strip,shots); body.append(strip); },`${shots.length} ${shots.length === 1 ? 'image or clip' : 'images and clips'} produced while working`));
     if (node.activity) node.activity.record = record; else node.activity = activityCard(id,record);
     node.cards.append(node.activity);
   } else if (!node.completed) {
     const stage = last?.stage || 'design'; node.heading.textContent = terminal ? 'Operation finished' : stageLabels[stage] || 'Working on your landing';
     node.progress.replaceChildren(); if (!terminal) node.progress.append(el('span','spinner'));
-    const timing = el('span','',terminal ? 'Loading saved results…' : elapsed(events[0]?.at) + ' · progress is saved'); timing.dataset.started = !terminal ? events[0]?.at || '' : ''; node.progress.append(timing);
+    const position = renderStageRail(node.rail,events,terminal);
+    const suffix = terminal ? '' : ' · progress is saved' + (position ? ' · ' + position : '');
+    const timing = el('span','',terminal ? 'Loading saved results…' : elapsed(events[0]?.at) + suffix);
+    if (!terminal) { timing.dataset.started = events[0]?.at || ''; timing.dataset.suffix = suffix; }
+    node.progress.append(timing);
+    renderToolLog(node.tools,events);
+    renderVisualStrip(node.visuals,eventVisuals(events));
     if (!node.activity) { node.activity = activityCard(id); node.cards.append(node.activity); }
   }
   if (node.completed && node.activity && node.cards.firstChild === node.activity && record) { node.activity.remove(); node.cards.append(node.activity); }
@@ -360,7 +494,7 @@ function renderConversation() {
   const scroll = $('chat-scroll'), nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 100, priorTop = scroll.scrollTop;
   const bounds = scroll.getBoundingClientRect(), anchor = !nearBottom ? document.elementFromPoint(bounds.left + bounds.width / 2,bounds.top + 12) : null;
   const anchorTop = anchor && scroll.contains(anchor) ? anchor.getBoundingClientRect().top : null;
-  const messages = active.conversation?.messages || [], results = active.operationResults || [], groups = new Map();
+  const messages = (active.conversation?.messages || []).filter(m => !active.funnelMode || m.stepId === active.activeStepId), results = (active.operationResults || []).filter(r => !active.funnelMode || r.stepId === active.activeStepId), groups = new Map();
   for (const event of active.events || []) if (!event.kind.startsWith('chat_')) { const id = event.operationId || 'legacy'; if (!groups.has(id)) groups.set(id,[]); groups.get(id).push(event); }
   const items = messages.map((message,index) => ({key:'message-' + message.id,at:Date.parse(message.at) || index,node:messageNode(message)}));
   if (active.creatives?.length) items.push({key:'inputs',at:Date.parse(active.createdAt) - 2,node:inputsNode()});
@@ -407,12 +541,13 @@ function updateSelection() {
 function selectBaseline() {
   const base = catalog?.baselines.find(row => row.version === $('baseline').value);
   $('baseline-description').textContent = base ? (base.supported ? base.description || 'Your work becomes an independent version.' : base.limitation || 'This baseline is preview-only.') : '';
-  comparison = 'baseline'; updateComposer(); renderPreview();
+  selectedStepId = base?.steps?.some(step => step.id === selectedStepId) ? selectedStepId : base?.steps?.[0]?.id;
+  comparison = 'baseline'; updateComposer(); renderPreview(); renderSteps();
 }
 async function refreshCatalog() {
   const previous = $('baseline').value; catalog = await api('/api/catalog'); busy = !!catalog.busy; catalog.creatives ||= []; catalog.baselines ||= []; catalog.adsets ||= []; catalog.report ||= {};
   $('baseline').replaceChildren(new Option('Choose a landing',''));
-  for (const base of catalog.baselines) $('baseline').append(new Option(base.version + (base.default ? ' · current default' : '') + (!base.supported ? ' · preview only' : ''),base.version));
+  for (const base of catalog.baselines) $('baseline').append(new Option(base.version + (base.default ? ' · current default' : '') + (!base.supported && !base.steps?.length ? ' · preview only' : ''),base.version));
   if (catalog.baselines.some(row => row.version === previous)) $('baseline').value = previous;
   $('adset').replaceChildren(new Option('Select individual creatives','')); for (const group of catalog.adsets) $('adset').append(new Option(`${group.name} · ${group.creativeIds.length} ads`,group.id));
   const period = catalog.report.period?.current; $('report-label').textContent = period ? `${period.start} → ${period.end}` : 'Your uploaded creatives';
@@ -434,7 +569,7 @@ async function fresh(base = '') {
   if (busy || uploading || sending) return;
   rememberView(); const token = ++activeRequest; stopStream(); active = null; resetDraftUi(); remember(null); error(''); selected = new Set(); creativePage = 0;
   await Promise.all([refreshCatalog(),refreshHistory()]); if (token !== activeRequest) return;
-  $('setup').hidden = false; $('draft-title').textContent = 'New landing'; $('draft-status').hidden = true; $('draft-meta').textContent = '';
+  $('setup').hidden = false; $('step-summary').hidden=true; $('draft-title').textContent = 'New landing'; $('draft-status').hidden = true; $('draft-meta').textContent = '';
   for (const id of ['publish','public-link','use-baseline','refresh-publication','retry','generate-saved','edit-page','draft-notice','show-directions']) $(id).hidden = true;
   $('history-menu').hidden = true; $('toggle-history').setAttribute('aria-expanded','false'); $('baseline').value = base;
   $('change-level').value = 'auto'; $('adset').value = ''; $('creative-search').value = ''; restoreInput(); selectBaseline(); renderCreatives(); setWorkspaceTab('chat'); $('chat-scroll').scrollTop = 0;
@@ -451,7 +586,7 @@ function editableDraft() { return active && active.status !== 'published' && !ac
 function updateComposer() {
   const blocked = busy || uploading || sending || !!previewRevision, text = $('goal-prompt').value.trim();
   const base = catalog?.baselines.find(row => row.version === $('baseline').value);
-  $('generate').disabled = blocked || (!active && !base?.supported) || (!text && (active || !selected.size));
+  $('generate').disabled = blocked || (!active && !base?.supported && !base?.steps?.length) || (!text && (active || !selected.size));
   $('new-version').disabled = busy || uploading || sending; $('attach-creatives').hidden = !!active; $('change-level').disabled = blocked;
   const level = $('change-level').value; $('level-description').textContent = {auto:'New audience or task: rebuild the page. Specific edits: keep them local.',light:'Copy only. Preserve layout, theme and imagery.',medium:'Copy, supported layouts, section order and media.',heavy:'Explore three directions, then choose a composition.'}[level];
   $('composer-status').textContent = previewRevision ? `Viewing revision ${previewRevision}. Select Latest to chat or edit.` : sending ? 'Sending your message…' : uploading ? 'Preparing your upload…' : busy ? 'Working — keep typing; send when this operation finishes.' : !active && !base ? 'Choose a starting page to begin.' : 'Ask to explore. Describe a change to apply it.';
@@ -471,12 +606,12 @@ async function sendMessage() {
   try {
     if (!active) {
       const baseline = catalog.baselines.find(row => row.version === $('baseline').value), adsetId = $('adset').value || null;
-      const draft = await api('/api/drafts',{baseVersion:baseline.version,baseHash:baseline.hash,reportToken:catalog.reportToken,creativeIds:adsetId ? [] : [...selected],adsetId,research:researchConfig(),goalPrompt:text,changeLevel});
+      const draft = await api('/api/drafts',{baseVersion:baseline.version,baseHash:baseline.steps?.length ? baseline.funnelHash : baseline.hash,stepId:baseline.steps?.length ? (selectedStepId || baseline.steps[0].id) : undefined,reportToken:catalog.reportToken,creativeIds:adsetId ? [] : [...selected],adsetId,research:researchConfig(),goalPrompt:text,changeLevel});
       await openDraft(draft.id,true); $('change-level').value = changeLevel;
     }
-    const id = active.id, key = 'growth-pending-' + id; let pending;
+    const id = active.id, key = 'growth-pending-' + id + ':' + (active.activeStepId || 'landing'); let pending;
     try { pending = JSON.parse(sessionStorage.getItem(key) || 'null'); } catch {}
-    if (!pending || pending.text !== text || pending.changeLevel !== changeLevel) pending = {text,requestId:crypto.randomUUID().replaceAll('-',''),expectedRevision:active.readyRevision || 0,changeLevel};
+    if (!pending || pending.text !== text || pending.changeLevel !== changeLevel) pending = {text,requestId:crypto.randomUUID().replaceAll('-',''),expectedRevision:active.readyRevision || 0,changeLevel,...(active.funnelMode ? {stepId:active.activeStepId} : {})};
     try { sessionStorage.setItem(key,JSON.stringify(pending)); } catch {}
     await api(`/api/drafts/${id}/messages`,pending);
     try { sessionStorage.removeItem(key); sessionStorage.removeItem('growth-input-new'); } catch {}
@@ -491,6 +626,7 @@ async function retryMessage(message) {
 async function action(name,payload = {}) {
   if (!active || busy) return; const id = active.id; error('');
   if (previewRevision) throw new Error('Select Latest before changing or publishing this draft.');
+  if (active.funnelMode && !['publish','prepare_publish','retry','research'].includes(name)) payload = {stepId:active.activeStepId,expectedRevision:active.readyRevision || 0,...payload};
   await api(`/api/drafts/${id}/${name}`,payload); if (active?.id !== id) return;
   await refreshActive(); await refreshHistory();
 }
@@ -528,14 +664,14 @@ function renderDraft() {
   $('generate-saved').hidden = !['draft','needs_selection'].includes(active.status); $('generate-saved').disabled = busy || !editableDraft();
   $('publish').hidden = !active.readyRevision || operating() || active.status === 'published' || !!active.publicUrl; $('publish').disabled = busy;
   const github = catalog?.publishingProvider === 'github', prepared = active.revisions?.find(r => r.number === active.readyRevision)?.publicationPrepared;
-  $('publish').textContent = github && !prepared ? 'Prepare publish ↗' : 'Publish ↗';
+  $('publish').textContent = github && !prepared ? 'Prepare publish ↗' : 'Publish new funnel ↗';
   $('refresh-publication').hidden = !github || !prepared || operating() || active.status === 'published' || !!active.publicUrl; $('refresh-publication').disabled = busy;
   $('public-link').hidden = !safeLink(active.publicUrl); if (safeLink(active.publicUrl)) $('public-link').href = safeLink(active.publicUrl);
-  $('use-baseline').hidden = active.status !== 'published'; $('edit-page').hidden = !active.readyRevision || !editableDraft(); $('edit-page').disabled = busy;
+  $('use-baseline').hidden = active.status !== 'published'; $('edit-page').hidden = (!active.readyRevision && !active.funnelMode) || !editableDraft(); $('edit-page').disabled = busy;
   if (active.status === 'awaiting_direction' && active.directionSetId !== lastDirectionSet) { lastDirectionSet = active.directionSetId; resultsMode = 'directions'; if (mobileTab !== 'preview') $('preview-unread').hidden = false; }
   if (active.status !== 'awaiting_direction') resultsMode = 'preview';
   if (active.previewUrl && contentSignatures.get('ready-preview') !== active.readyRevision) { if (!previewRevision) comparison = 'draft'; contentSignatures.set('ready-preview',active.readyRevision); }
-  renderConversation(); renderPreview();
+  renderConversation(); renderPreview(); renderSteps();
   if (!$('editor-card').hidden) renderEditor();
   updateComposer();
 }
@@ -546,7 +682,7 @@ function viewRevision(number) { previewRevision = number === active?.readyRevisi
 function showComparison(mode) { comparison = mode; renderPreview(); }
 function renderPreview() {
   const base = catalog?.baselines.find(row => row.version === $('baseline').value);
-  const baseline = active?.baselinePreviewUrl || (base ? `${catalog.previewBase}/${base.version}` : null);
+  const baseline = active?.baselinePreviewUrl || (base ? `${catalog.previewBase}/${base.version}${base.steps?.find(s => s.id === selectedStepId)?.path?.replace(/\/$/,'') || ''}?_step=${encodeURIComponent(selectedStepId || '')}` : null);
   const preview = active?.previewUrl ? previewRevision ? `/api/drafts/${active.id}/preview/${previewRevision}` : active.previewUrl : null;
   if (!preview) comparison = 'baseline';
   $('preview-area').hidden = resultsMode === 'directions'; $('direction-previews').hidden = resultsMode !== 'directions';
@@ -599,6 +735,7 @@ function setCopyChange(section,name,value,original) {
 }
 function buttonUnavailable(button,unavailable) { button.dataset.unavailable = String(!!unavailable); button.disabled = busy || !!unavailable; }
 function renderEditor() {
+  if (active?.funnelMode) { renderStepEditor(); return; }
   const key = `${active.id}:${active.readyRevision}`;
   if (editorKey === key) return;
   if (editorKey && hasEditorChanges()) {
@@ -787,7 +924,7 @@ $('refresh-publication').onclick = guarded(() => action('prepare_publish',{expec
 $('use-baseline').onclick = guarded(() => fresh(active.variant));
 $('edit-page').onclick = () => { if (!active || busy || previewRevision || !editableDraft()) return; renderPreview(); $('editor-card').hidden = false; $('editor-card').open = true; renderEditor(); setWorkspaceTab('chat'); $('editor-card').scrollIntoView({block:'start'}); $('editor-card').querySelector('summary').focus(); };
 $('copy-form').onsubmit = async event => {
-  event.preventDefault(); pruneChanges(); if (!hasEditorChanges()) { $('editor-note').textContent = 'Edit a field or move a section before saving.'; return; }
+  event.preventDefault(); if (active?.funnelMode) { await saveStepEditor(); return; } pruneChanges(); if (!hasEditorChanges()) { $('editor-note').textContent = 'Edit a field or move a section before saving.'; return; }
   for (const fields of Object.values(editorChanges.copy || {})) for (const value of Object.values(fields)) if (Array.isArray(value) ? !value.length || value.some(line => !line.trim()) : !String(value).trim()) { error('Copy fields cannot be empty.'); return; }
   try { await action('revise',{changes:structuredClone(editorChanges),changeLevel:'medium',expectedRevision:editorBaseRevision || active.readyRevision}); editorChanges = {}; $('editor-card').open = false; }
   catch(e) { error(e.message); }
@@ -801,16 +938,159 @@ document.querySelectorAll('[data-workspace-tab]').forEach(node => { node.onclick
 $('new-activity').onclick = () => { $('chat-scroll').scrollTop = $('chat-scroll').scrollHeight; $('new-activity').hidden = true; };
 $('chat-scroll').addEventListener('scroll',() => { const node = $('chat-scroll'); if (node.scrollHeight - node.scrollTop - node.clientHeight < 80) $('new-activity').hidden = true; },{passive:true});
 document.addEventListener('click',event => { if (!event.target.closest('.draft-switcher')) { $('history-menu').hidden = true; $('toggle-history').setAttribute('aria-expanded','false'); } });
-document.addEventListener('keydown',event => { if (event.key === 'Escape' && !$('history-menu').hidden) { $('history-menu').hidden = true; $('toggle-history').setAttribute('aria-expanded','false'); $('toggle-history').focus(); } });
+document.addEventListener('keydown',event => { if(event.key === 'Escape') showSteps(false); if (event.key === 'Escape' && !$('history-menu').hidden) { $('history-menu').hidden = true; $('toggle-history').setAttribute('aria-expanded','false'); $('toggle-history').focus(); } });
 function setPaneWidth(width) { if (innerWidth < 900) return; const max = Math.min(560,innerWidth * .48), value = Math.round(Math.max(320,Math.min(max,width))); document.documentElement.style.setProperty('--chat-width',value + 'px'); $('pane-divider').setAttribute('aria-valuenow',String(value)); $('pane-divider').setAttribute('aria-valuemax',String(Math.floor(max))); try { localStorage.setItem('growth-chat-width',String(value)); } catch {} }
 $('pane-divider').addEventListener('pointerdown',event => { event.preventDefault(); $('pane-divider').setPointerCapture(event.pointerId); document.body.classList.add('resizing'); });
 $('pane-divider').addEventListener('pointermove',event => { if ($('pane-divider').hasPointerCapture(event.pointerId)) setPaneWidth(event.clientX); });
 for (const event of ['pointerup','pointercancel','lostpointercapture']) $('pane-divider').addEventListener(event,() => document.body.classList.remove('resizing'));
 $('pane-divider').addEventListener('keydown',event => { if (['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) { event.preventDefault(); const current = Number($('pane-divider').getAttribute('aria-valuenow')); setPaneWidth(event.key === 'Home' ? 320 : event.key === 'End' ? 560 : current + (event.key === 'ArrowLeft' ? -20 : 20)); } });
 window.addEventListener('resize',() => { if (innerWidth >= 900) setPaneWidth(Number($('pane-divider').getAttribute('aria-valuenow'))); });
-setInterval(() => document.querySelectorAll('[data-started]').forEach(node => { if (node.dataset.started) node.textContent = elapsed(node.dataset.started) + ' · progress is saved'; }),1000);
+setInterval(() => document.querySelectorAll('[data-started]').forEach(node => { if (node.dataset.started) node.textContent = elapsed(node.dataset.started) + (node.dataset.suffix ?? ' · progress is saved'); }),1000);
 setInterval(() => { if (active && (busy || !streamLive)) refreshActive().catch(() => connection('reconnecting','Reconnecting…')); },1500);
 window.addEventListener('beforeunload',() => { cacheInput(); stopStream(); });
+// Any-step workspace. Text inputs and manual edits are retained independently per step.
+let selectedStepId = null, importPoll = null;
+const stepEditors = new Map();
+const stepKey = () => `${active?.id}:${active?.activeStepId}`;
+function showSteps(open) {
+  const available = active?.funnelMode || catalog?.baselines.find(b => b.version === $('baseline').value)?.steps?.length;
+  $('step-nav').hidden = !open || !available;
+  $('workspace').classList.toggle('steps-open',!$('step-nav').hidden);
+  $('toggle-steps').setAttribute('aria-expanded',String(!$('step-nav').hidden));
+}
+function renderSteps() {
+  const rows = active ? active.steps || [] : catalog?.baselines.find(b => b.version === $('baseline').value)?.steps || [];
+  $('toggle-steps').hidden = !rows.length;
+  if (!rows.length) { showSteps(false); $('step-summary').hidden=true; return; }
+  if (!$('step-list').dataset.initialized) { showSteps(true); $('step-list').dataset.initialized = 'true'; }
+  $('step-list').replaceChildren();
+  for (const [index,step] of rows.entries()) {
+    const node = button('',guarded(async () => {
+      if (busy || previewRevision) return;
+      cacheInput();
+      if (active?.funnelMode) {
+        stepEditors.set(stepKey(),{changes:structuredClone(editorChanges),key:editorKey,revision:editorBaseRevision});
+        active = await api(`/api/drafts/${active.id}/select_step`,{stepId:step.id,expectedRevision:active.readyRevision || 0});
+        const saved = stepEditors.get(stepKey()); editorChanges = saved?.changes || {}; editorKey = saved?.key || ''; editorBaseRevision = saved?.revision || 0;
+        feedNodes.clear(); contentSignatures.clear(); restoreInput(); renderDraft();
+      } else { selectedStepId = step.id; renderSteps(); renderPreview(); }
+      if (innerWidth < 1100) showSteps(false);
+    }),'step-button');
+    node.setAttribute('aria-current',(active?.activeStepId || selectedStepId) === step.id ? 'step' : 'false'); node.disabled = busy || !!previewRevision;
+    node.append(el('span','',`${index+1}. ${step.title}`),el('small','',step.changed ? '● Draft changes' : step.metrics?.source === 'posthog' ? `${step.metrics.counts.viewed} tracked visitors` : step.component.replaceAll('-',' ')));
+    $('step-list').append(node);
+  }
+  const selectedNode = $('step-list').querySelector('[aria-current=step]');
+  const navigationKey = `${active?.id || 'new'}:${active?.activeStepId || selectedStepId}`;
+  if ($('step-list').dataset.selected !== navigationKey) { $('step-list').dataset.selected = navigationKey; selectedNode?.scrollIntoView({block:'nearest'}); }
+  const host = $('step-evidence'); host.replaceChildren();
+  const summary = $('step-summary'); summary.hidden = !active?.funnelMode;
+  if (active?.funnelMode) {
+    const summaryKey = JSON.stringify([active.activeStepId,active.stepEvidence?.goal,active.stepEvidence?.metrics]);
+    if (summary.dataset.key !== summaryKey) {
+      summary.dataset.key=summaryKey;summary.replaceChildren(el('span','eyebrow','SELECTED STEP'),el('h2','',active.step.title),el('p','muted',active.stepEvidence?.goal || (active.step.role === 'paywall' ? 'Describe a goal for checkout or payment conversion.' : 'Describe what you want to improve on this step.')));
+      if (active.stepEvidence?.metrics?.source === 'posthog') summary.append(el('p','small',`${active.stepEvidence.metrics.counts.viewed} tracked visitors · exact ${active.baseVersion} evidence`));
+    }
+  }
+  if (!active?.funnelMode) { host.append(el('p','muted','Select any step, then describe your goal in chat.')); return; }
+  const evidence = active.stepEvidence?.metrics;
+  host.append(el('strong','',active.step?.role === 'paywall' ? 'View → checkout → payment' : 'View → step completion'));
+  if (evidence?.source === 'posthog') {
+    const c = evidence.counts; host.append(el('p','',`${format(c.viewed)} views · ${format(c.completed)} completions`));
+    if (active.step.role === 'paywall') host.append(el('p','',`${format(c.checkouts)} checkouts · ${format(c.payments)} payment events`));
+    host.append(el('p','',format(evidence.rates[active.step.role === 'paywall' ? 'payments' : 'completed'],'rate') + ' conversion'));
+    host.append(el('p','muted',`${evidence.entryStart.slice(0,10)} – ${evidence.entryEnd.slice(0,10)} UTC (end exclusive) · 24h follow-up`),el('p','muted',evidence.cohort),el('p','muted',`Fetched ${new Date(evidence.fetchedAt).toLocaleString()}${evidence.stale ? ' · saved snapshot; refresh failed' : ''}`));
+    if (evidence.lowVolume) host.append(el('p','warning','Limited traffic; use this as directional evidence.'));
+  } else host.append(el('p','muted','Exact PostHog evidence is not available yet. You can still edit this step.'));
+  for (const line of evidence?.limitations || []) host.append(el('p','muted',line));
+  if (active.stepEvidence?.metricsError) host.append(el('p','warning',friendlyError(active.stepEvidence.metricsError)));
+  const refresh = button('Refresh PostHog evidence',guarded(() => action('refresh_metrics'))); refresh.disabled = busy || !!previewRevision; host.append(refresh);
+  const research = button('Research this step',guarded(() => action('research',researchConfig()))); research.disabled = busy || !!previewRevision;host.append(research);
+  if (active.readyRevision) host.append(el('p','muted',`${rows.filter(s => s.changed).length} improved steps in revision ${active.readyRevision}. Publishing includes the complete funnel.`));
+  for (const page of catalog?.library || []) if (page.status === 'ready') {
+    const replace = button('Replace with ' + (page.title || hostLabel(page.url)),guarded(() => action('replace_step',{libraryId:page.id,changeLevel:'heavy'})));
+    replace.disabled = busy || !!previewRevision; host.append(replace);
+  }
+}
+function renderStepEditor() {
+  const key = `${stepKey()}:${active.readyRevision || 0}`;
+  if (editorKey && editorKey !== key && Object.keys(editorChanges).length) {
+    $('editor-note').textContent = 'Your saved edits refer to an earlier revision. Review them before applying to the latest funnel.';
+  } else { editorKey=key; editorBaseRevision=active.readyRevision || 0; }
+  $('section-outline').replaceChildren();$('copy-fields').replaceChildren();$('layout-fields').replaceChildren();$('composition-fields').replaceChildren();$('preset-area').hidden=true;
+  $('editor-revision').textContent=active.step.title;
+  for (const [pointer,value] of Object.entries(active.editing?.stepCopy || {})) {
+    const label=el('label','',pointer.replace(/^props\//,'').replaceAll('/',' · '));const input=el('textarea');input.value=editorChanges.copyPatch?.[pointer] ?? value;input.maxLength=4000;
+    input.oninput=()=>{editorChanges.copyPatch ||= {};if(input.value===value)delete editorChanges.copyPatch[pointer];else editorChanges.copyPatch[pointer]=input.value;};label.append(input);$('copy-fields').append(label);
+  }
+  const design=editorChanges.design || active.editing?.design;
+  if(design) {
+    for (const block of design.blocks) {
+      if(block.kind==='native') {$('layout-fields').append(el('p','step-native-note','Native interaction · answer validation and checkout stay protected.'));continue;}
+      for(const field of ['heading','body','label']) {
+        if(!block[field] && field!=='body') continue;
+        const label=el('label','',block.id+' · '+field), input=el('textarea');input.value=block[field];input.maxLength=field==='body'?4000:field==='heading'?300:120;
+        input.oninput=()=>{editorChanges.design ||= structuredClone(active.editing.design);editorChanges.design.blocks.find(b=>b.id===block.id)[field]=input.value;};label.append(input);$('layout-fields').append(label);
+      }
+    }
+  }
+  $('editor-note').textContent='Only this step changes. Other accepted step edits remain in the complete funnel.';
+}
+async function saveStepEditor() {
+  const payload=structuredClone(editorChanges);
+  if(!payload.design && !Object.keys(payload.copyPatch || {}).length) {error('Edit a field before saving.');return;}
+  try {await action(active.readyRevision?'revise':'generate',{...payload,expectedRevision:editorBaseRevision,changeLevel:'medium'});editorChanges={};editorKey='';stepEditors.delete(stepKey());$('editor-card').open=false;}catch(e){error(e.message);}
+}
+async function openUrl() {
+  if(busy) return; error('');const url=$('page-url').value.trim();if(!url)return;
+  const result=await api('/api/resolve-url',{url});const host=$('url-matches');host.replaceChildren();
+  if(result.kind==='funnel') {
+    const open=async match=>{const draft=await api('/api/drafts',{...match,title:undefined,path:undefined,goalPrompt:'',changeLevel:'medium',research:researchConfig()});await openDraft(draft.id);showSteps(true);};
+    if(result.matches.length===1) await open(result.matches[0]);
+    else {host.append(el('p','small muted','This route contains several steps. Choose the one to improve.'));for(const match of result.matches) host.append(button(`${match.baseVersion} · ${match.title}`,guarded(()=>open(match))));}
+    return;
+  }
+  const imported=result.kind==='library' && result.page.status!=='failed' ? result : await api('/api/import-url',{url});
+  catalog.library=[...(catalog.library || []).filter(p=>p.id!==imported.page.id),imported.page];renderLibrary();
+  if(imported.page.status==='importing') pollImports();
+}
+function replicaFrame(page) {
+  const frame=el('iframe');frame.title='Editable replica';frame.setAttribute('sandbox','');
+  const doc=document.implementation.createHTMLDocument('Replica');const design=page.design;
+  const style=doc.createElement('style');style.textContent=`body{margin:0;padding:28px;font:16px/1.5 system-ui;background:${design.background};color:${design.foreground}}main{max-width:${design.width}px;margin:auto}section{margin:0 0 ${design.spacing}px}h1{font-size:38px;line-height:1.1}h2{font-size:25px}img{max-width:100%;border-radius:12px}button{border:0;border-radius:8px;padding:12px 20px;background:${design.accent};color:white}`;doc.head.append(style);
+  const main=doc.createElement('main');doc.body.append(main);
+  for(const block of design.blocks){const section=doc.createElement('section');section.style.textAlign=block.align;
+    if(block.heading){const heading=doc.createElement(block.kind==='hero'?'h1':'h2');heading.textContent=block.heading;section.append(heading);}
+    if(block.body){const text=doc.createElement('p');text.textContent=block.body;section.append(text);}
+    if(block.media && assetUrl(page.assets[block.media])) {const image=doc.createElement('img');image.src=new URL(page.assets[block.media],location.origin).href;image.alt=block.label;section.append(image);}
+    for(const item of block.items){const text=doc.createElement('p');text.textContent=item;section.append(text);}
+    if(block.label){const control=doc.createElement('button');control.textContent=block.label;control.disabled=true;section.append(control);}main.append(section);
+  }
+  frame.srcdoc='<!doctype html>'+doc.documentElement.outerHTML;return frame;
+}
+function renderLibrary() {
+  const host=$('page-library');host.replaceChildren();
+  for(const page of catalog?.library || []) {
+    const card=el('details','library-page');card.append(el('summary','',`${page.title || hostLabel(page.url)} · ${page.status}`));
+    card.append(link('Source page ↗',page.url));
+    if(page.status==='ready') {
+      card.append(replicaFrame(page));
+      const captures=el('details');captures.append(el('summary','','Compare with source captures'));for(const url of page.screenshots || []){const shot=imageNode(url,'Source capture');if(shot)captures.append(shot);}card.append(captures);
+      const edits=el('details');edits.append(el('summary','','Edit replica copy'));const next=structuredClone(page.design);
+      for(const block of next.blocks)for(const field of ['heading','body','label'])if(block[field]){const label=el('label','',block.id+' · '+field), input=el('textarea');input.value=block[field];input.oninput=()=>block[field]=input.value;label.append(input);edits.append(label);}
+      edits.append(button('Save replica',guarded(async()=>{const updated=await api('/api/library/'+page.id,{design:next,expectedUpdatedAt:page.updatedAt || page.completedAt});catalog.library=catalog.library.map(p=>p.id===updated.id?updated:p);renderLibrary();})));card.append(edits);
+      card.append(el('p','small muted','Choose a funnel and step, then use Replace step in the navigator. Native behavior and real offers are preserved.'));
+    } else if(page.error){card.append(el('p','warning',friendlyError(page.error)),button('Retry capture',guarded(async()=>{await api('/api/import-url',{url:page.url});pollImports();})));}
+    else card.append(el('p','muted','Capturing desktop and mobile, saving assets, and creating an editable replica…'));
+    host.append(card);
+  }
+}
+function pollImports(){if(importPoll)return;importPoll=setInterval(async()=>{try{const result=await api('/api/library');catalog.library=result.pages;busy=!!result.busy;renderLibrary();updateComposer();if(!result.pages.some(p=>p.status==='importing')){clearInterval(importPoll);importPoll=null;}}catch(e){error(e.message);}},2500);}
+$('open-url').onclick=guarded(openUrl);$('page-url').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();guarded(openUrl)();}};
+$('toggle-steps').onclick=()=>showSteps($('step-nav').hidden);$('close-steps').onclick=()=>showSteps(false);
+const originalRefreshCatalog=refreshCatalog;
+refreshCatalog=async()=>{await originalRefreshCatalog();renderLibrary();if(catalog.library?.some(p=>p.status==='importing'))pollImports();};
+
 (async () => {
   try { setPaneWidth(Number(localStorage.getItem('growth-chat-width')) || 400); } catch {}
   await Promise.all([refreshCatalog(),refreshHistory()]); updateResearchSummary(); restoreInput();
