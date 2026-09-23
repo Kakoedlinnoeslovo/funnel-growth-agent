@@ -100,6 +100,8 @@ class LandingPatternRead(BaseModel):
     def _lines_to_list(cls, value: Any) -> Any:
         if value is None:
             return []
+        # The reader often answers a descriptive field in prose. Keep that observation as one
+        # item instead of discarding the whole page read over its shape.
         if isinstance(value, str):
             return [line.strip() for line in value.splitlines() if line.strip()]
         return value

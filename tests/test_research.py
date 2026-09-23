@@ -79,23 +79,25 @@ def test_pattern_read_normalises_imagery_fields() -> None:
     assert LandingPatternRead.model_validate({}).imagery_formats == []
 
 
-def test_prose_observations_do_not_discard_the_whole_reference() -> None:
-    """A model answering an observation list in prose used to fail validation, which dropped
-    that reference from the evidence entirely. Each line becomes one observation instead."""
+def test_pattern_read_keeps_prose_observations_instead_of_failing() -> None:
+    """The reader answers descriptive fields in prose; a page read must survive that."""
     read = LandingPatternRead.model_validate(
         {
-            "heroComposition": "Centered typography stack\nSingle accent button",
-            "typography": "One geometric sans",
-            "spacing": "Generous vertical rhythm",
+            "heroComposition": "Centered vertical flow with the CTA above the fold.",
+            "typography": "One grotesk at three sizes",
+            "spacing": "Roomy, 96px between sections",
             "proofPlacement": "Logos directly under the hero",
-            "ctaRepetition": "Repeated at each pricing tier",
-            "sectionSequence": "hero\npricing\nfaq",
+            "ctaRepetition": "Twice: hero and footer",
+            "notablePatterns": "Live editor preview\nPricing anchored to a free tier",
         }
     )
-    assert read.hero_composition == ["Centered typography stack", "Single accent button"]
-    assert read.typography == ["One geometric sans"]
-    assert read.section_sequence == ["hero", "pricing", "faq"]
-    assert read.cta_repetition == ["Repeated at each pricing tier"]
+    assert read.hero_composition == ["Centered vertical flow with the CTA above the fold."]
+    assert read.typography == ["One grotesk at three sizes"]
+    assert read.cta_repetition == ["Twice: hero and footer"]
+    assert read.notable_patterns == [
+        "Live editor preview",
+        "Pricing anchored to a free tier",
+    ]
     # Lists still pass through untouched.
     assert LandingPatternRead.model_validate(
         {"typography": ["Serif display", "Mono captions"]}

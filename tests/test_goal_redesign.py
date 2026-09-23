@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 import shutil
+from types import SimpleNamespace
 
 import pytest
 import test_workflow as fixtures
@@ -258,6 +259,52 @@ def test_three_directions_persist_select_once_and_light_preserves_heavy(workflow
     )
 
 
+def test_one_rejected_direction_still_offers_the_others(workflow):
+    """A single direction the model cannot get past validation must not void the whole run."""
+    draft = create_goal_draft(workflow, "heavy")
+    model = workflow.model
+
+    def complete(messages, system, execute):
+        brief = json.loads(messages[0]["content"])
+        if (brief.get("recipe") or {}).get("id") == "workflow-first":
+            raise ValueError("Each direction needs a distinct composition: received ['proof']")
+        return GoalModel.complete(model, messages, system, execute)
+
+    workflow.model = SimpleNamespace(complete=complete, calls=model.calls)
+    choice = job(workflow, draft, "generate")
+    assert choice["status"] == "awaiting_direction", choice["error"]
+    assert [r["id"] for r in choice["directionSet"]["records"]] == ["results-first", "proof-first"]
+    assert "Workflow first" in choice["directionSet"]["unavailable"][0]
+    failures = [e for e in choice["events"] if e["kind"] == "step_failed"]
+    assert "distinct composition" in failures[-1]["data"]["error"]
+    ready = job(
+        workflow,
+        draft,
+        "select_direction",
+        {"directionSetId": choice["directionSet"]["id"], "directionId": "proof-first"},
+    )
+    assert ready["status"] == "ready", ready["error"]
+
+
+def test_a_single_surviving_direction_is_not_a_choice(workflow):
+    """One option is no decision to make: fail loudly, naming every reason."""
+    draft = create_goal_draft(workflow, "heavy")
+    model = workflow.model
+
+    def complete(messages, system, execute):
+        brief = json.loads(messages[0]["content"])
+        recipe = brief.get("recipe") or {}
+        if recipe.get("id") != "proof-first":
+            raise ValueError("no blueprint for " + recipe.get("id", "?"))
+        return GoalModel.complete(model, messages, system, execute)
+
+    workflow.model = SimpleNamespace(complete=complete, calls=model.calls)
+    failed = job(workflow, draft, "generate")
+    assert failed["status"] == "failed" and not failed.get("directionSet")
+    assert "1 of 3 design directions" in failed["error"]
+    assert "Results first" in failed["error"] and "Workflow first" in failed["error"]
+
+
 def test_direction_failure_retry_keeps_last_preview_and_reuses_proposal(workflow):
     draft = create_goal_draft(workflow, "heavy")
     choice = job(workflow, draft, "generate")
@@ -345,3 +392,19 @@ def test_reanalysis_refreshes_legacy_evidence_without_rewriting_prior_revision(w
     video.write_bytes(b"changed content, same thumbnail")
     workflow.analyze_selection(refreshed)
     assert len(calls) == 2
+
+
+def test_refreshed_evidence_keeps_unchosen_directions_choosable(workflow):
+    """Reading a competitor page again must not cost three designed directions."""
+    draft = create_goal_draft(workflow, "heavy")
+    choice = job(workflow, draft, "generate")
+    assert choice["status"] == "awaiting_direction"
+    refreshed = job(workflow, draft, "research", {"competitors": ["kittl"]})
+    assert refreshed["status"] == "awaiting_direction"
+    ready = job(
+        workflow,
+        draft,
+        "select_direction",
+        {"directionSetId": choice["directionSet"]["id"], "directionId": "results-first"},
+    )
+    assert ready["status"] == "ready", ready["error"]

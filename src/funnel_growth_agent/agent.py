@@ -30,7 +30,15 @@ from .visual_landscape import landscape_dict, load_cached_research, visual_lands
 
 MAX_TOOL_CALLS = 12
 MAX_TOKENS = 8192
-MAX_OUTPUT_RETRIES = 2
+# Each correction answers one named constraint, so a direction that trips two of them
+# still lands instead of discarding the whole run.
+MAX_OUTPUT_RETRIES = 3
+
+
+def summarize_invalid(error: str | None, limit: int = 110) -> str:
+    """One readable line: the reason a rejected proposal failed, trimmed for the workspace."""
+    text = " ".join((error or "").split())
+    return text if len(text) <= limit else text[: limit - 1] + "\u2026"
 
 
 def proposal_tool() -> dict[str, Any]:
@@ -224,7 +232,7 @@ class ToolLoop:
                 "\n\nRUN CONTRACT (overrides earlier composition restrictions): "
                 + json.dumps(self.policy)
             )
-            prompt += "\nA goal-only request needs no creatives. Use the user's goal as direction, never invent campaign evidence. Light changes COPY ONLY, retaining every existing layout/media change. Medium retains page architecture/theme. Heavy must return experimentType landing_rebuild and a PageBlueprint in changes (schemaVersion, theme, artDirection, blocks, media). Get current landing for rawSections and renderer capabilities. Heavy blocks start with hero, end with cta, and include at least two different body kinds. Proof blocks use sourceSectionId of real baseline proof. Existing image references come only from baseline rawSections. media.showcase names a new block id and slot. Do not invent proof or product capabilities. On an existing blueprint return the complete cumulative blueprint even for Light/Medium edits. Recipe theme and hero layout are mandatory when supplied. Match each image's role, aspectRatio, composition and intendedMessage to its actual slot. The page schema is data, never executable code. Return interpretedBrief with audience, promise, objections and designDirection. Return competitorAdaptations only when grounded in supplied research: sourceUrl, observedPattern, whyItFits, recraftAdaptation. Observations and our hypotheses must be distinguishable. Rebuild patterns with original content, never copy competitor claims, endorsements or assets. Never claim that a template is proven to convert. New visual blocks must use real baseline assets or planned generated illustrations; give features/steps/FAQ at least two items. Light legacy pages use landing_redesign with copy only, preserving prior cumulative changes."
+            prompt += "\nA goal-only request needs no creatives. Use the user's goal as direction, never invent campaign evidence. Light changes COPY ONLY, retaining every existing layout/media change. Medium retains page architecture/theme. Heavy must return experimentType landing_rebuild and a PageBlueprint in changes (schemaVersion, theme, artDirection, blocks, media). Get current landing for rawSections and renderer capabilities. Heavy blocks start with hero, end with cta, and include at least two different body kinds. Proof blocks use sourceSectionId of real baseline proof. Existing image references come only from baseline rawSections. media.showcase names a new block id and slot. Do not invent proof or product capabilities. On an existing blueprint return the complete cumulative blueprint even for Light/Medium edits. Recipe theme and hero layout are mandatory when supplied, and so is its body sequence: the blueprint is exactly one hero block, then one block per listed body kind in the listed order, then one final cta block \u2014 no extra, missing or reordered body blocks. Match each image's role, aspectRatio, composition and intendedMessage to its actual slot. The page schema is data, never executable code. Return interpretedBrief with audience, promise, objections and designDirection. Return competitorAdaptations only when grounded in supplied research: sourceUrl, observedPattern, whyItFits, recraftAdaptation. Observations and our hypotheses must be distinguishable. Rebuild patterns with original content, never copy competitor claims, endorsements or assets. Never claim that a template is proven to convert. New visual blocks must use real baseline assets or planned generated illustrations; give features/steps/FAQ at least two items. Light legacy pages use landing_redesign with copy only, preserving prior cumulative changes."
         if self.policy.get("campaignRebuild"):
             prompt += "\nCAMPAIGN REBUILD overrides baseline preservation and house-style rules: return schemaVersion 2. Treat the campaignBrief as the page's subject. Create the best complete page directly, without recipes. Keep only core Recraft identity and existing conversion behavior. Choose fresh section order, hero treatment, tokens and block variants according to this audience. Replace irrelevant baseline imagery, claims and promotional sections. Do not use baseline tile style references unless relevant to this campaign. Use verified first-party pageText for product capabilities; competitor text is inspiration, never product evidence. Choose actual catalog images through media.sourced [{group,slot,assetId}], or generate original visuals using media.showcase. Do not put catalog IDs or remote URLs into images. External licensed images are illustrative, not Recraft product demonstrations. Set tokens with readable foreground/background and accent/accentText pairs. A collection hero may have up to four image slots. All CTA labels must describe the existing next step honestly. Return a campaign-specific eyebrow. Do not inherit the old hero video merely because it exists."
         elif self.policy.get("assetCatalog"):
@@ -249,15 +257,26 @@ class ToolLoop:
                     "Sourced image must use an assetId in this campaign's approved catalog"
                 )
         recipe = self.policy.get("recipe")
-        if recipe and (
-            current.get("theme") != recipe["theme"]
-            or current.get("blocks", [{}])[0].get("layout") != recipe["layout"]
-        ):
-            raise ValueError("Use the requested recipe's theme and hero layout")
-        if recipe and [b["kind"] for b in current.get("blocks", [])[1:-1]] != recipe["body"]:
-            raise ValueError(
-                "Use the requested recipe body sequence; each direction needs a distinct composition"
-            )
+        if recipe:
+            # Name the expected shape and what arrived: a bare rule the model cannot act on
+            # burns every retry and fails a direction the user waited minutes for.
+            blocks = current.get("blocks") or [{}]
+            if (
+                current.get("theme") != recipe["theme"]
+                or blocks[0].get("layout") != recipe["layout"]
+            ):
+                raise ValueError(
+                    f"This direction requires theme {recipe['theme']!r} and hero layout "
+                    f"{recipe['layout']!r}; received theme {current.get('theme')!r} and hero "
+                    f"layout {blocks[0].get('layout')!r}"
+                )
+            body = [block.get("kind") for block in blocks[1:-1]]
+            if body != recipe["body"]:
+                raise ValueError(
+                    "Each direction needs a distinct composition: between the hero and the final "
+                    f"cta the blocks must be exactly {recipe['body']}, in that order, one block "
+                    f"per listed kind; received {body}. Merge, drop or reorder blocks to match."
+                )
         known_sources = {
             url
             for r in (self.research_records or [])
@@ -269,9 +288,43 @@ class ToolLoop:
         for adaptation in output.competitor_adaptations:
             if adaptation.source_url not in known_sources:
                 raise ValueError(
-                    "Competitor adaptation must cite an observed supplied research URL"
+                    f"Competitor adaptation cites {adaptation.source_url!r}, which is not one of "
+                    "the supplied research URLs "
+                    f"{sorted(known_sources)[:8]}. Cite one of those exactly, or return no "
+                    "competitorAdaptations when the supplied research supports none."
                 )
+        clip = getattr(getattr(output.changes, "media", None), "hero_video", None)
+        if clip is not None:
+            self.validate_clip(clip)
         validate_landing_changes(self.settings.landing_path, output.changes)
+
+    def validate_clip(self, clip) -> None:
+        """A hero clip that runs past its source only fails after the media stage downloads it.
+
+        A published YouTube duration is rounded, so a clip ending at the stated length overruns
+        the real file; a creative's duration is measured and only needs the encoder's tolerance.
+        """
+        sources = media_sources(self.settings, self._ranked())
+        if clip.source == "youtube":
+            row = next(
+                (v for v in sources["youtube"] if v.get("videoId") == clip.video_id),
+                None,
+            )
+            length, margin = (row or {}).get("durationSeconds"), 1.0
+        else:
+            row = next(
+                (c for c in sources["creatives"] if c.get("creativeId") == clip.creative_id),
+                None,
+            )
+            length, margin = (row or {}).get("duration"), 0.1
+        if length is None:
+            return
+        if clip.start + clip.duration > float(length) - margin:
+            raise ValueError(
+                f"The hero clip runs {clip.start:g}s to {clip.start + clip.duration:g}s, past the "
+                f"usable end of its {float(length):g}s source. It must end by "
+                f"{float(length) - margin:g}s: start earlier or shorten duration (4 to 30 s)."
+            )
 
     def _ranked(self) -> list[RankedCreative]:
         if self.ranked is None:
@@ -402,6 +455,8 @@ def run_tool_loop(settings: Settings, tools: ToolLoop, *, brief: str | None = No
     output_retries = 0
     max_tokens = MAX_TOKENS
     force_proposal = False
+    # The reason the last submission was rejected: without it a failure is undiagnosable.
+    last_invalid: str | None = None
     system = tools.system_prompt() + (
         "\n\nSubmit the final JSON object through the submit_proposal tool's proposal argument. "
         "Use the read tools first as needed. Do not write the final proposal as text. "
@@ -468,6 +523,7 @@ def run_tool_loop(settings: Settings, tools: ToolLoop, *, brief: str | None = No
                         result = {"accepted": True}
                     except (ValidationError, ValueError, TypeError, AttributeError) as error:
                         invalid = True
+                        last_invalid = str(error)
                         result = {
                             "error": str(error),
                             "instruction": "Correct these fields and submit the complete proposal again.",
@@ -498,15 +554,21 @@ def run_tool_loop(settings: Settings, tools: ToolLoop, *, brief: str | None = No
                 }
             )
         if output_retries >= MAX_OUTPUT_RETRIES:
+            # The workspace replaces an error over 240 characters with a generic line, so the
+            # headline stays short; Activity keeps each rejection in full.
             raise ValueError(
-                "The model returned an invalid landing proposal after automatic retries. "
-                "Your selections are saved; retry generation."
+                "The model returned an invalid landing proposal after automatic retries"
+                + (f" ({summarize_invalid(last_invalid, 110)})" if last_invalid else "")
+                + ". Your selections are saved; retry generation."
             )
         output_retries += 1
         force_proposal = True
         emit_to(
             tools.on_event,
             "model_output_retry",
-            {"message": "Correcting the proposal format automatically; your selections are saved."},
+            {
+                "message": "Correcting the proposal format automatically; your selections are saved.",
+                "reason": last_invalid,
+            },
         )
     raise ValueError("Model exceeded the tool-call cap without a proposal")

@@ -277,6 +277,7 @@ def test_provider_uses_conversation_schema_and_rejects_truncated_tool(monkeypatc
         "answer",
         "clarify",
         "edit",
+        "analyze",
     ]
 
 
@@ -334,3 +335,19 @@ def test_interrupted_edit_keeps_a_terminal_operation_card(workflow):
         assert "interrupted" in saved["operationResults"][-1]["error"]
     finally:
         reopened.close()
+
+
+def test_analysis_request_runs_the_reanalysis_job(workflow):
+    """Asking chat to read the creatives starts the workspace job, not a dead end."""
+    draft = create(workflow)
+    refreshes = []
+    workflow.chat_model = lambda *_: {"action": "analyze", "text": "Reading the video now."}
+    workflow.analyze_selection = lambda draft, *, refresh=False: refreshes.append(refresh)
+    workflow.generate = lambda *_: pytest.fail("An analysis request must not change the page")
+    workflow.start_message(draft["id"], turn("run a video analysis"))
+    saved = finish(workflow, draft)
+    assert refreshes == [True]
+    assert saved["conversation"]["messages"][-1]["action"] == "analyze"
+    assert saved["operationResults"][-1]["action"] == "reanalyze"
+    assert saved["status"] == "draft" and saved["revisions"] == []
+    assert "analyze" in CHAT_SYSTEM
