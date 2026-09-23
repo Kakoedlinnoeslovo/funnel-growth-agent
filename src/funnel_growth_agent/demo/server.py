@@ -540,6 +540,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Expected a JSON object")
             if path == "/api/catalog" and method == "GET":
                 self._json(200, workflow.catalog())
+            elif path == "/api/resolve-url" and method == "POST":
+                self._json(200, workflow.resolve_url(payload.get("url", "")))
+            elif path == "/api/import-url" and method == "POST":
+                self._json(202, workflow.start_import(payload.get("url", "")))
+            elif path == "/api/library" and method == "GET":
+                self._json(200, {"pages": workflow.library_catalog(), "busy": workflow.busy})
+            elif path.startswith("/api/library/") and method == "POST":
+                self._json(200, workflow.edit_library(path.removeprefix("/api/library/"), payload))
             elif path == "/api/drafts":
                 if method == "GET":
                     self._json(200, {"drafts": workflow.list_drafts(), "busy": workflow.busy})
@@ -562,10 +570,23 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError("Preview revision is unavailable")
                     dist = workflow.path(parts[0]) / "revisions" / str(number) / "lab/dist"
                     location = workflow.previews.url(dist, draft["variant"])
+                    if draft.get("funnelMode"):
+                        from urllib.parse import urlencode
+
+                        from ..funnel_steps import step_document
+
+                        step, _ = step_document(
+                            dist.parent / "funnels" / draft["variant"], draft["activeStepId"]
+                        )
+                        location += (
+                            step["path"].rstrip("/") + "?" + urlencode({"_step": step["id"]})
+                        )
                     self.send_response(302)
                     self.send_header("Location", location)
                     self.send_header("Content-Length", "0")
                     self.end_headers()
+                elif len(parts) == 2 and parts[1] == "select_step" and method == "POST":
+                    self._json(200, workflow.select_step(parts[0], payload))
                 elif len(parts) == 2 and parts[1] == "messages" and method == "POST":
                     self._json(202, workflow.start_message(parts[0], payload))
                 elif len(parts) == 2 and method == "POST":
@@ -732,9 +753,16 @@ def serve(
     speed: float = 1.0,
     open_browser: bool = False,
     verbose: bool = False,
+    preview_base: str = PREVIEW_BASE,
 ) -> None:
     server = make_server(
-        settings, recording=recording, live=live, port=port, speed=speed, verbose=verbose
+        settings,
+        recording=recording,
+        live=live,
+        port=port,
+        speed=speed,
+        verbose=verbose,
+        preview_base=preview_base,
     )
     host, bound = server.server_address[:2]
     url = f"http://{host}:{bound}/"

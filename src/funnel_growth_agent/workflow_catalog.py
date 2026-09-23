@@ -14,6 +14,7 @@ from ruamel.yaml import YAML
 
 from .config import Settings
 from .creatives import is_comparable_destination
+from .funnel_steps import steps, tree_hash
 from .landing import HERO_COMPONENTS, get_current_landing
 from .metrics import baseline_from_report, load_latest_reports
 from .models import Baseline, MetricsSlice, RankedCreative
@@ -73,6 +74,8 @@ def baseline_catalog(settings: Settings) -> list[dict[str, Any]]:
                 if supported
                 else "This page stores its content in a custom React renderer rather than editable landing sections.",
                 "hash": landing["hash"],
+                "funnelHash": tree_hash(folder),
+                "steps": steps(folder),
             }
         )
     return out
@@ -97,10 +100,20 @@ def local_asset(settings: Settings, raw: Any, creative_id: str, suffix: str) -> 
 def report_snapshot(settings: Settings) -> dict[str, Any]:
     weekly, _ = load_latest_reports(settings)
     if weekly is None:
-        raise ValueError("No weekly report available. You can still upload creatives to generate a page.")
+        raise ValueError(
+            "No weekly report available. You can still upload creatives to generate a page."
+        )
     report = {
         key: weekly.get(key)
-        for key in ("generated_at", "period", "run_date", "title", "ph_flows", "creative_audience", "_path")
+        for key in (
+            "generated_at",
+            "period",
+            "run_date",
+            "title",
+            "ph_flows",
+            "creative_audience",
+            "_path",
+        )
     }
     report["creatives"] = [
         {key: value for key, value in row.items() if not key.endswith("b64")}

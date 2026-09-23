@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .apply import _tree_digest, apply_run, hard_diff_site, patch_site
 from .competitor_research import ResearchConfig, research_competitors
 from .config import Settings
+from .funnel_steps import step_document, tree_hash
 from .gemini import analyze_ranked
 from .landing import get_current_landing, landing_hash
 from .landing_patch import validate_landing_changes
@@ -41,6 +42,7 @@ from .workflow_catalog import (
 from .workflow_chat import ConversationMixin, respond
 from .workflow_editing import ElementChanges, editing_capabilities, merge_changes
 from .workflow_github import GitHubPublisher
+from .workflow_library import LibraryMixin
 from .workflow_preview import (
     MARKER,
     PreviewServers,
@@ -50,6 +52,7 @@ from .workflow_preview import (
     deployment_config,
     publish_artifact,
 )
+from .workflow_steps import StepWorkflowMixin
 from .workflow_uploads import save_upload, upload_catalog
 
 
@@ -59,6 +62,7 @@ def now() -> str:
 
 class CreateDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    stepId: str | None = None
     goalPrompt: str = Field(default="", max_length=8000)
     changeLevel: Literal["light", "medium", "heavy"] = "medium"
     baseVersion: str
@@ -72,7 +76,7 @@ class CreateDraft(BaseModel):
     def selected(self):
         if self.creativeIds and self.adsetId:
             raise ValueError("Select creatives or one ad set")
-        if not (self.creativeIds or self.adsetId or self.goalPrompt.strip()):
+        if not (self.creativeIds or self.adsetId or self.goalPrompt.strip() or self.stepId):
             raise ValueError("Describe a goal or select creatives")
         if len(set(self.creativeIds)) != len(self.creativeIds):
             raise ValueError("Creative selection contains duplicates")
@@ -163,13 +167,14 @@ def review_selection(settings: Settings, creatives: list, analyses: list) -> Sel
     return SelectionReview.model_validate_json(content[content.find("{") : content.rfind("}") + 1])
 
 
-class Workflow(ConversationMixin):
+class Workflow(LibraryMixin, StepWorkflowMixin, ConversationMixin):
     def __init__(
         self,
         settings: Settings,
         *,
         preview_base: str = "http://localhost:5173/pm",
         model: Any = None,
+        step_model: Any = None,
         chat_model: Callable = respond,
         media_tools: Any = None,
         validate: Any = None,
@@ -187,6 +192,7 @@ class Workflow(ConversationMixin):
         self.root = settings.data_dir / "drafts"
         self.model, self.media_tools, self.validate = model, media_tools, validate
         self.chat_model = chat_model
+        self.step_model = step_model
         self.builder, self.publisher = builder, publisher
         self.analyzer, self.reviewer = analyzer, reviewer
         self.browser, self.reader, self.style_reader = browser, reader, style_reader
@@ -211,7 +217,9 @@ class Workflow(ConversationMixin):
                 conversation["status"] = "failed"
                 for message in conversation.get("messages", []):
                     if message.get("status") == "pending":
-                        message.update(status="failed", error="The reply was interrupted. Retry this message.")
+                        message.update(
+                            status="failed", error="The reply was interrupted. Retry this message."
+                        )
                 self.save(draft)
             if draft["status"] == "needs_selection":
                 draft.update(status="draft", error=None, selectionReview=None, retry=None)
@@ -226,7 +234,9 @@ class Workflow(ConversationMixin):
                         revision["status"] = "failed"
                         revision["error"] = draft["error"]
                 if draft.get("operationId"):
-                    self.snapshot_operation(draft, (draft.get("retry") or {}).get("action", "interrupted"))
+                    self.snapshot_operation(
+                        draft, (draft.get("retry") or {}).get("action", "interrupted")
+                    )
                 self.save(draft)
                 self._event(
                     draft,
@@ -316,6 +326,7 @@ class Workflow(ConversationMixin):
                 )
         return {
             "baselines": baseline_catalog(self.settings),
+            "library": self.library_catalog(),
             "creatives": [self.present_creative(item) for item in creatives],
             "adsets": list(groups.values()),
             "reportToken": digest(report),
@@ -392,6 +403,8 @@ class Workflow(ConversationMixin):
             | {"publicationPrepared": bool(item.get("publication"))}
             for item in draft["revisions"]
         ]
+        if draft.get("funnelMode"):
+            return self.present_steps(draft, view)
         view["directions"] = []
         if draft.get("directionSet"):
             ds = draft["directionSet"]
@@ -456,11 +469,15 @@ class Workflow(ConversationMixin):
                 ),
                 None,
             )
-            if baseline is None or not baseline["supported"]:
+            if baseline is None or (not baseline["supported"] and not request.stepId):
                 raise ValueError(
                     (baseline or {}).get("limitation") or "Baseline is no longer available"
                 )
-            if baseline["hash"] != request.baseHash:
+            if request.stepId:
+                step_document(
+                    self.settings.pricing_lab_dir / "funnels" / request.baseVersion, request.stepId
+                )
+            if baseline["funnelHash" if request.stepId else "hash"] != request.baseHash:
                 raise ValueError("The baseline changed. Refresh the catalog and select it again.")
             uploads = upload_catalog(self.settings)
             upload_ids = {row["id"] for row in uploads}
@@ -490,10 +507,14 @@ class Workflow(ConversationMixin):
             folder = self.path(draft_id)
             folder.mkdir(parents=True)
             copy_lab(self.settings.pricing_lab_dir, folder / "base")
-            if (
-                landing_hash(folder / "base/funnels" / request.baseVersion / "steps/landing.yaml")
-                != request.baseHash
-            ):
+            saved_hash = (
+                tree_hash(folder / "base/funnels" / request.baseVersion)
+                if request.stepId
+                else landing_hash(
+                    folder / "base/funnels" / request.baseVersion / "steps/landing.yaml"
+                )
+            )
+            if saved_hash != request.baseHash:
                 raise ValueError("Baseline changed while saving the draft. Refresh and try again.")
             for row in selected:
                 for key in ("imagePath", "videoPath"):
@@ -508,7 +529,19 @@ class Workflow(ConversationMixin):
                         shutil.copy2(source, dest)
                         row[key] = str(dest)
             draft = {
-                "schemaVersion": 4,
+                "schemaVersion": 5 if request.stepId else 4,
+                "funnelMode": bool(request.stepId),
+                "activeStepId": request.stepId,
+                "stepStates": {
+                    request.stepId: {
+                        "goal": request.goalPrompt,
+                        "agreedBrief": "",
+                        "metrics": None,
+                        "context": None,
+                    }
+                }
+                if request.stepId
+                else {},
                 "conversation": {"messages": [], "agreedBrief": "", "status": "idle"},
                 "operationResults": [],
                 "goalPrompt": request.goalPrompt.strip(),
@@ -685,9 +718,16 @@ class Workflow(ConversationMixin):
             raise
 
     def _start_locked_job(
-        self, draft: dict, action: str, payload: dict | None = None, *, message_id: str | None = None
+        self,
+        draft: dict,
+        action: str,
+        payload: dict | None = None,
+        *,
+        message_id: str | None = None,
     ) -> dict:
         """Transfer the held job lock to a worker, including a conversational handoff."""
+        if draft.get("funnelMode"):
+            return self.start_step_job(draft, action, payload or {}, message_id)
         draft_id = draft["id"]
         draft.setdefault("legacyEvidence", self.legacy_evidence(draft))
         payload = payload or {}
@@ -730,9 +770,7 @@ class Workflow(ConversationMixin):
                 or (draft.get("readyRevision") or 0) != ds.get("expectedRevision")
             ):
                 raise ValueError("These design directions are stale; regenerate them")
-            choice = next(
-                (r for r in ds["records"] if r["id"] == payload.get("directionId")), None
-            )
+            choice = next((r for r in ds["records"] if r["id"] == payload.get("directionId")), None)
             if not choice:
                 raise ValueError("Choose one of the saved directions")
             payload = {
@@ -750,24 +788,16 @@ class Workflow(ConversationMixin):
             if not request.instruction.strip():
                 previous = draft["revisions"][draft["readyRevision"] - 1]["proposal"]
                 patch = (
-                    request.changes.model_dump(
-                        by_alias=True, exclude_unset=True, exclude_none=True
-                    )
+                    request.changes.model_dump(by_alias=True, exclude_unset=True, exclude_none=True)
                     if request.changes
-                    else {
-                        "copy": request.copy_changes.model_dump(
-                            by_alias=True, exclude_none=True
-                        )
-                    }
+                    else {"copy": request.copy_changes.model_dump(by_alias=True, exclude_none=True)}
                 )
                 from .models import PageBlueprint
 
                 merged = (
                     PageBlueprint.model_validate(patch["page"])
                     if patch.get("page")
-                    else RedesignChanges.model_validate(
-                        merge_changes(previous["changes"], patch)
-                    )
+                    else RedesignChanges.model_validate(merge_changes(previous["changes"], patch))
                 )
                 validate_landing_changes(
                     self.settings_for(draft, self.path(draft_id) / "base").landing_path, merged
@@ -822,7 +852,8 @@ class Workflow(ConversationMixin):
                 or (
                     "Research competitor ads and destinations"
                     if action == "research"
-                    else draft.get("goalPrompt") or "Turn the selected creatives into one Recraft landing"
+                    else draft.get("goalPrompt")
+                    or "Turn the selected creatives into one Recraft landing"
                 ),
                 "constraints": [
                     "Use the selected creatives and saved baseline",
@@ -899,7 +930,15 @@ class Workflow(ConversationMixin):
         research_competitors(
             settings,
             ResearchConfig.model_validate(draft.get("research") or {}),
-            {"analyses": draft.get("analyses", []), "creatives": draft["creatives"]},
+            {
+                "analyses": draft.get("analyses", []),
+                "creatives": draft["creatives"],
+                **(
+                    {"selectedStep": self.step_context(draft, "", draft["changeLevel"])}
+                    if draft.get("funnelMode")
+                    else {}
+                ),
+            },
             browser=self.browser,
             reader=self.reader,
             on_event=lambda kind, data: self._event(draft, kind, {**data, "stage": "research"}),
@@ -1390,6 +1429,11 @@ class Workflow(ConversationMixin):
             "input": {"publicationRefresh": True},
             "status": "generating",
             "proposal": previous["proposal"],
+            **{
+                key: previous[key]
+                for key in ("stepId", "changedSteps", "evidence", "context", "changeSummary")
+                if key in previous
+            },
         }
         draft["revisions"].append(revision)
         self.save(draft)
@@ -1478,13 +1522,14 @@ class Workflow(ConversationMixin):
             draft, "registering", {"message": "Adding the published version to the pricing lab"}
         )
         self.install_version(draft, lab)
-        update_run(
-            self.settings,
-            revision["proposal"]["runId"],
-            status="deployed",
-            variant=variant,
-            deployed_at=now(),
-        )
+        if not draft.get("funnelMode"):
+            update_run(
+                self.settings,
+                revision["proposal"]["runId"],
+                status="deployed",
+                variant=variant,
+                deployed_at=now(),
+            )
         draft["status"] = "published"
         draft["publicationNotice"] = None
         draft["publishedAt"] = now()

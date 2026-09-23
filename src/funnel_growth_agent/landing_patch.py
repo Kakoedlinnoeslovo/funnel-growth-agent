@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import RLock
 from typing import Any
 
 from ruamel.yaml import YAML
@@ -21,6 +22,7 @@ from .models import (
     SectionCopy,
 )
 
+_yaml_lock = RLock()
 _yaml = YAML()
 _yaml.preserve_quotes = True
 _yaml.width = 4096
@@ -29,11 +31,12 @@ _yaml.indent(mapping=2, sequence=4, offset=2)
 
 
 def load_yaml(path: Path) -> Any:
-    return _yaml.load(path.read_text(encoding="utf-8"))
+    with _yaml_lock:
+        return _yaml.load(path.read_text(encoding="utf-8"))
 
 
 def dump_yaml(path: Path, data: Any) -> None:
-    with path.open("w", encoding="utf-8") as handle:
+    with _yaml_lock, path.open("w", encoding="utf-8") as handle:
         _yaml.dump(data, handle)
 
 
@@ -213,6 +216,7 @@ def validate_landing_changes(
     """
     if isinstance(changes, PageBlueprint):
         from .blueprint import compose_document, require_renderer
+
         root = next(parent for parent in landing_path.parents if parent.name == "funnels").parent
         require_renderer(root)
         compose_document(load_yaml(landing_path), changes, placeholders=True)

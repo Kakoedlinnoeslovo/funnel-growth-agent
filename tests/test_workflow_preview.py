@@ -119,15 +119,26 @@ def test_static_preview_routing_and_isolation(tmp_path):
         response = httpx.get(url)
         assert response.status_code == 200 and "Preview" in response.text
         csp = response.headers["content-security-policy"]
-        assert "connect-src 'none'" in csp and "form-action 'none'" in csp
+        assert "connect-src 'self'" in csp and "form-action 'none'" in csp
         assert "https://cdn.prod.website-files.com" in csp
         assert httpx.get(root + "/pm/assets/test.js").text == "script"
         proxy = previews.proxy(root + "/pm")
         proxied = httpx.get(proxy + "/main/v1_a1")
         assert proxied.text == response.text
-        assert "connect-src 'none'" in proxied.headers["content-security-policy"]
+        assert "connect-src 'self'" in proxied.headers["content-security-policy"]
         with pytest.raises(ValueError, match="local lab"):
             previews.proxy("https://example.com/pm")
         assert httpx.get(root + "/%2e%2e/private.json").status_code == 404
     finally:
         previews.close()
+
+
+def test_preview_flag_and_navigation_guard_are_served_not_built():
+    from funnel_growth_agent.workflow_preview import preview_html
+
+    original = b'<html lang="en"><head></head><body></body></html>'
+    served = preview_html(original)
+    assert b'data-growth-preview="true"' in served
+    assert b"preventDefault" in served
+    assert preview_html(served) == served
+    assert b"data-growth-preview" not in original

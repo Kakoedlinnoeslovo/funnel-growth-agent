@@ -79,7 +79,23 @@ class LandingPatternRead(BaseModel):
     people_shown: bool | None = Field(default=None, alias="peopleShown")
     below_fold_sections: list[str] = Field(default_factory=list, alias="belowFoldSections")
 
-    @field_validator("imagery_style", mode="before")
+    # Every free-text observation list: models answer these in prose often enough that a
+    # single string used to fail the whole read and drop that reference from the evidence.
+    @field_validator(
+        "first_screen_sections",
+        "proof_elements",
+        "notable_patterns",
+        "phone_differences",
+        "section_sequence",
+        "hero_composition",
+        "typography",
+        "spacing",
+        "proof_placement",
+        "cta_repetition",
+        "imagery_style",
+        "below_fold_sections",
+        mode="before",
+    )
     @classmethod
     def _lines_to_list(cls, value: Any) -> Any:
         if isinstance(value, str):
@@ -273,6 +289,7 @@ class GstackBrowser:
               }
               return {url:location.href,title:document.title,text:(document.body.innerText || '').slice(0,35000),
                 links:links(document).slice(0,300),ads:cards,
+                images:Array.from(document.images).filter(visible).slice(0,30).map(i => ({url:i.currentSrc || i.src,alt:i.alt})),
                 hasForm:Array.from(document.querySelectorAll('form')).some(visible),
                 hasPassword:!!document.querySelector('input[type=password]')};
             })())"""

@@ -25,6 +25,7 @@ class Settings:
     pricing_lab_dir: Path
     data_dir: Path
     base_version: str
+    growth_loop_metrics_dir: Path | None = None
     max_report_age_hours: float = 48
     min_landing_people: int = 100
     min_creative_spend: float = 5.0
@@ -127,6 +128,9 @@ def load_settings() -> Settings:
         pricing_lab_dir / "funnels" / "site.yaml"
     )
     return Settings(
+        growth_loop_metrics_dir=Path(os.environ["GROWTH_LOOP_METRICS_DIR"]).expanduser().resolve()
+        if os.getenv("GROWTH_LOOP_METRICS_DIR")
+        else None,
         growth_loop_dir=_path(os.getenv("GROWTH_LOOP_DIR"), REPO_DIR.parent / "growth-loop"),
         pricing_lab_dir=pricing_lab_dir,
         data_dir=_path(os.getenv("FUNNEL_GROWTH_DATA_DIR"), REPO_DIR / "data"),

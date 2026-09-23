@@ -27,3 +27,6 @@ data-demo/
 data/acceptance/
 
 data/creative_analysis/video/
+
+# Local data dir used for live workspace verification.
+data-verify/

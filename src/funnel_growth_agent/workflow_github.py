@@ -136,8 +136,13 @@ class GitHubPublisher:
             )
         version.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source / "funnels" / variant, version)
+        from .funnel_steps import require_renderer, steps
+
+        if any(load_yaml(version / step["file"]).get("design") for step in steps(version)):
+            require_renderer(checkout)
         if (load_yaml(version / "steps/landing.yaml").get("props") or {}).get("growthDesign"):
             from .blueprint import require_renderer
+
             require_renderer(checkout)
         contract_paths = register_version_contracts(checkout, version, variant)
         original_site = (checkout / "funnels/site.yaml").read_bytes()

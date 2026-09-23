@@ -300,6 +300,9 @@ def relevance_context(context: Any) -> dict:
         "visibleText",
         "productClaims",
         "ctaIntent",
+        "goal",
+        "component",
+        "primaryMetric",
     }
     texts: set[str] = set()
     creative_ids: set[str] = set()
@@ -307,7 +310,7 @@ def relevance_context(context: Any) -> dict:
     def visit(value: Any, *, field: str = "") -> None:
         if isinstance(value, dict):
             for key, child in value.items():
-                if key in {"creatives", "analyses", "analysis"} or key in text_fields:
+                if key in {"creatives", "analyses", "analysis", "selectedStep", "step"} or key in text_fields:
                     visit(child, field=key)
                 elif key in {"id", "creativeId", "ad_id"} and field in {"creatives", "analyses"}:
                     creative_ids.add(str(child))
