@@ -25,7 +25,7 @@ from .landing_diff import (
 from .landing_patch import ProducedMedia, dump_yaml, load_yaml, patch_hero_copy, patch_redesign
 from .media import MediaTools, base_showcase_groups, default_media_tools, produce_media
 from .memory import existing_variants, get_run, update_run
-from .models import MediaPlan, RedesignChanges, SavedProposal
+from .models import MediaPlan, PageBlueprint, RedesignChanges, SavedProposal
 from .sources import creative_image_path, creative_video_path, youtube_ids
 from .tile_prompt import reference_kind
 
@@ -49,8 +49,16 @@ Emit = Callable[[str, str], None]
 
 DESCRIPTION_MAX = 180
 PREVIEW_BASE = "http://localhost:5173/pm"
-LABELS = {"hero_copy": "hero-copy", "landing_redesign": "landing-redesign"}
-TITLES = {"hero_copy": "Hero copy experiment", "landing_redesign": "Landing redesign experiment"}
+LABELS = {
+    "landing_rebuild": "landing-rebuild",
+    "hero_copy": "hero-copy",
+    "landing_redesign": "landing-redesign",
+}
+TITLES = {
+    "landing_rebuild": "Landing rebuild experiment",
+    "hero_copy": "Hero copy experiment",
+    "landing_redesign": "Landing redesign experiment",
+}
 
 
 def next_variant_name(settings: Settings) -> str:
@@ -198,6 +206,9 @@ def check_media_plan(plan: MediaPlan, proposal: SavedProposal, settings: Setting
     if not plan.showcase:
         return
     groups = base_showcase_groups(settings, proposal.base_version)
+    reference_groups = dict(groups)
+    if isinstance(proposal.changes, PageBlueprint):
+        groups.update({b.id: (b.headline, [None] * 4) for b in proposal.changes.blocks})
     for item in plan.showcase:
         if item.group not in groups:
             raise ApplyError(f"media: showcase group {item.group!r} is not on the base landing")
@@ -205,7 +216,21 @@ def check_media_plan(plan: MediaPlan, proposal: SavedProposal, settings: Setting
             raise ApplyError(f"media: showcase group {item.group!r} has no slot {item.slot}")
         for ref in item.references:
             kind = reference_kind(ref)
-            if kind == "creative":
+            if kind == "video":
+                _, creative_id, seconds = ref.split(":")
+                if (
+                    creative_id not in known
+                    or not creative_video_path(settings, creative_id).is_file()
+                ):
+                    raise ApplyError(
+                        f"media: video reference {ref!r} is not among available selected creatives"
+                    )
+                from .video_analysis import probe_video
+
+                duration, _ = probe_video(creative_video_path(settings, creative_id))
+                if not 0 <= float(seconds) < duration:
+                    raise ApplyError("media: video reference timestamp is outside the clip")
+            elif kind == "creative":
                 creative_id = ref.split(":", 1)[1]
                 if creative_id not in known:
                     raise ApplyError(
@@ -215,7 +240,9 @@ def check_media_plan(plan: MediaPlan, proposal: SavedProposal, settings: Setting
                     raise ApplyError(f"media: reference {ref!r} has no local jpg in growth-loop")
             elif kind == "tile":
                 _, label, index_text = ref.split(":", 2)
-                if label not in groups or int(index_text) >= len(groups[label][1]):
+                if label not in reference_groups or int(index_text) >= len(
+                    reference_groups[label][1]
+                ):
                     raise ApplyError(f"media: reference {ref!r} does not exist on the base landing")
 
 
@@ -272,9 +299,10 @@ def _apply_run(
     current = landing_hash(settings.landing_path)
     if current != proposal.base_landing_hash:
         raise ApplyError(f"stale base hash: {settings.base_version} landing drifted since propose")
+    rebuild = isinstance(proposal.changes, PageBlueprint)
     redesign = isinstance(proposal.changes, RedesignChanges)
-    kind = "landing_redesign" if redesign else "hero_copy"
-    media_plan = proposal.changes.media if redesign else None
+    kind = "landing_rebuild" if rebuild else "landing_redesign" if redesign else "hero_copy"
+    media_plan = proposal.changes.media if redesign or rebuild else None
     if media_plan is not None and media_plan.is_empty():
         media_plan = None
     if media_plan is not None:
@@ -336,7 +364,14 @@ def _apply_run(
             )
             emit("media", f"{len(produced.files.all)} media files staged")
         landing = tmp_variant / "steps" / "landing.yaml"
-        if redesign:
+        if rebuild:
+            from .blueprint import compose_document
+
+            doc = compose_document(load_yaml(landing), proposal.changes, produced)
+            dump_yaml(landing, doc)
+            order = [row.get("id", row["component"]) for row in doc["props"]["sections"]]
+            emit("patch", "New page composition: " + ", ".join(order))
+        elif redesign:
             order = patch_redesign(landing, proposal.changes, produced)
             emit("patch", "sections: " + ", ".join(order))
         else:

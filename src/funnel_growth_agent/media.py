@@ -1,7 +1,7 @@
 """Produce the hero clip and showcase tiles a MediaPlan asks for. Every artifact is cached by
 its content key, so a retry after a failed validate re-encodes nothing and calls no API.
 
-Tiles: the house-style prompt (tile_prompt.py) plus reference images go to Nano Banana Pro,
+Tiles: the house-style prompt (tile_prompt.py) plus reference images go to Nano Banana 2 by default,
 N candidates are generated in parallel, a Gemini vision judge picks one, and the chosen tile
 becomes a reference for the next slot of its group."""
 
@@ -168,8 +168,6 @@ def resolve_references(
     base_version: str,
     chosen_previous: Path | None,
 ) -> list[ResolvedReference]:
-    if plan.references and plan.tile_model == "nano_banana_2":
-        raise ApplyError("media: nano_banana_2 takes no references; use nano_banana_pro")
     if len(plan.references) > MAX_STYLE_REFS:
         raise ApplyError(f"media: at most {MAX_STYLE_REFS} references per tile")
     groups = base_showcase_groups(settings, base_version)
@@ -182,6 +180,20 @@ def resolve_references(
                     f"media: {plan.group!r} slot {plan.slot}: 'previous' has no chosen tile yet"
                 )
             path = chosen_previous
+        elif kind == "video":
+            from .sources import creative_video_path
+            from .video_analysis import extract_frame, probe_video, video_fingerprint
+
+            _, creative_id, seconds = ref.split(":")
+            video = creative_video_path(settings, creative_id)
+            duration, _ = probe_video(video)
+            timestamp = float(seconds)
+            if not 0 <= timestamp < duration:
+                raise ApplyError("Video reference timestamp is outside the source clip")
+            key = video_fingerprint(video, settings.gemini_model, settings.analysis_schema_version)
+            path = settings.analysis_dir / "video" / key / f"reference-{timestamp:.3f}.jpg"
+            if not path.is_file():
+                extract_frame(video, timestamp, path)
         elif kind == "creative":
             creative_id = ref.split(":", 1)[1]
             path = creative_image_path(settings, creative_id)
@@ -255,6 +267,7 @@ class ImageClient(Protocol):
         references: list[ResolvedReference],
         seeds: list[int],
         dests: list[Path],
+        aspect_ratio: str = TILE_ASPECT,
     ) -> list[Path]: ...
 
 
@@ -276,8 +289,9 @@ class GeminiImageClient:
         references: list[ResolvedReference],
         seeds: list[int],
         dests: list[Path],
+        aspect_ratio: str = TILE_ASPECT,
     ) -> list[Path]:
-        return asyncio.run(self._gather(model, prompts, references, seeds, dests))
+        return asyncio.run(self._gather(model, prompts, references, seeds, dests, aspect_ratio))
 
     async def _gather(
         self,
@@ -286,6 +300,7 @@ class GeminiImageClient:
         references: list[ResolvedReference],
         seeds: list[int],
         dests: list[Path],
+        aspect_ratio: str = TILE_ASPECT,
     ) -> list[Path]:
         from google import genai
         from google.genai import types
@@ -301,7 +316,7 @@ class GeminiImageClient:
             config = types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
                 image_config=types.ImageConfig(
-                    aspect_ratio=TILE_ASPECT, image_size=TILE_IMAGE_SIZE
+                    aspect_ratio=aspect_ratio, image_size=TILE_IMAGE_SIZE
                 ),
                 seed=seed,
                 temperature=1.0,
@@ -474,7 +489,12 @@ class HttpGlamClient:
         references: list[ResolvedReference],
         seeds: list[int],
         dests: list[Path],
+        aspect_ratio: str = TILE_ASPECT,
     ) -> list[Path]:
+        if aspect_ratio != TILE_ASPECT:
+            raise RuntimeError(
+                "glam backend currently supports only 16:9; use Gemini for other ratios"
+            )
         if references:
             raise RuntimeError("glam backend takes no reference images; unset GLAM_API_KEY")
         route = MODEL_TO_ROUTE.get(
@@ -556,9 +576,10 @@ JUDGE_PROMPT = (
     '"{prompt}"\n'
     "Score every candidate 0-10 on each criterion:\n"
     "{rubric}"
+    "Also score briefRelevance 0-10: does this show the intended message and fit the asset role? Penalize misleading product UI or generated examples presented as factual screenshots. Inspect desktop legibility and mobile crop safety.\n"
     "Intended text: {lettering}. Count intended text as correct, not stray.\n"
     'Return JSON only: {{"candidates":[{{"index":1,"houseStyle":0,"subjectClarity":0,'
-    '"cleanliness":0,"cropSafety":0,"paletteAdherence":0,"notes":"one sentence"}}],'
+    '"cleanliness":0,"cropSafety":0,"paletteAdherence":0,"briefRelevance":0,"notes":"one sentence"}}],'
     '"best":1,"reason":"one sentence"}}\n'
     "Index candidates from 1 in the order shown. Do not give design advice."
 )
@@ -609,11 +630,14 @@ def score_candidates(
             cleanliness=clamp(row, "cleanliness"),
             crop_safety=clamp(row, "cropSafety"),
             palette_adherence=clamp(row, "paletteAdherence"),
+            brief_relevance=clamp(row, "briefRelevance") if "briefRelevance" in row else None,
             notes=str(row.get("notes") or ""),
         )
         score.total = round(
             sum(weight * getattr(score, attr) for attr, weight in weights.items()), 2
         )
+        if score.brief_relevance is not None:
+            score.total = round(0.8 * score.total + 0.2 * score.brief_relevance, 2)
         scores.append(score)
     eligible = [s for s in scores if s.cleanliness >= CLEANLINESS_VETO] or scores
     chosen = max(eligible, key=lambda s: (s.total, -s.index)).index if eligible else 0
@@ -625,6 +649,44 @@ def _as_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def candidate_contexts(path: Path) -> list[tuple[str, Path]]:
+    """Render the actual contain/crop rules at desktop and phone display sizes."""
+    from .video_analysis import run_media
+
+    result = []
+    for label, width, height, mode in (
+        ("Desktop hero · contain", 620, 349, "contain"),
+        ("Phone gallery · center crop", 350, 263, "cover"),
+    ):
+        suffix = "desktop" if mode == "contain" else "phone"
+        dest = path.with_name(path.stem + f"-{suffix}-context.jpg")
+        transform = f"scale={width}:{height}:force_original_aspect_ratio=" + (
+            "decrease" if mode == "contain" else "increase"
+        )
+        transform += (
+            f",pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=0xf5f6f2"
+            if mode == "contain"
+            else f",crop={width}:{height}"
+        )
+        run_media(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-y",
+                "-i",
+                str(path),
+                "-vf",
+                transform,
+                "-frames:v",
+                "1",
+                str(dest),
+            ]
+        )
+        result.append((label, dest))
+    return result
 
 
 class GeminiTileJudge:
@@ -655,6 +717,16 @@ class GeminiTileJudge:
             parts.append(
                 types.Part.from_bytes(data=candidate.read_bytes(), mime_type=image_mime(candidate))
             )
+        for index, candidate in enumerate(candidates, 1):
+            for label, context in candidate_contexts(candidate):
+                parts.extend(
+                    [
+                        types.Part.from_text(
+                            text=f"Candidate {index} · {label}. Simulated placement, not a product screenshot."
+                        ),
+                        types.Part.from_bytes(data=context.read_bytes(), mime_type="image/jpeg"),
+                    ]
+                )
         palette_text = ", ".join(palette) if palette else "the prompt's colours"
         rubric = JUDGE_RUBRIC.get(family, JUDGE_RUBRIC["default"]).format(palette=palette_text)
         text = JUDGE_PROMPT.format(
@@ -1086,6 +1158,7 @@ def generate_tile(
                 references=spec.references,
                 seeds=[seeds[k] for k, _ in missing],
                 dests=[path for _, path in missing],
+                aspect_ratio=plan.aspect_ratio,
             )
         except Exception as error:
             raise ApplyError(f"media: image generation failed for {stem}: {error}") from error
@@ -1210,7 +1283,9 @@ def produce_media(
             else:
                 source = creative_source(clip.source_id, settings)
             total = probe_duration(source, tools)
-            if clip.start + clip.duration > total - 0.1:
+            # Allow endpoint rounding (e.g. a nominal 30s video probes as 29.974s).
+            # FFmpeg stops at EOF; larger overruns still indicate an invalid plan.
+            if clip.start + clip.duration > total + 0.1:
                 raise ApplyError(
                     f"media: clip {clip.start:g}s+{clip.duration:g}s exceeds source length {total:.1f}s"
                 )

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from .config import Settings, load_settings
+from .config import PACKAGE_DIR, Settings, load_settings
 from .memory import existing_variants, latest_applied, latest_run
 from .models import HeroCopyChanges, RedesignChanges, SavedProposal
 
@@ -21,6 +21,26 @@ app.add_typer(demo_app, name="demo")
 
 def _settings() -> Settings:
     return load_settings()
+
+
+@app.command("index-youtube")
+def index_youtube(
+    output: Path | None = typer.Option(None, help="Save to this path; defaults to the data directory."),
+    allow_smaller: bool = typer.Option(False, help="Allow a reviewed decrease in channel coverage."),
+) -> None:
+    """Save all Recraft videos, Shorts and recorded livestreams for offline demo lookup."""
+    from .youtube_index import refresh_catalog
+
+    destination = output or _settings().data_dir / "youtube_catalog.json"
+    try:
+        catalog = refresh_catalog(
+            destination, seed=PACKAGE_DIR / "youtube_catalog.json", allow_smaller=allow_smaller
+        )
+    except Exception as error:
+        typer.echo(f"YouTube index unchanged: {error}", err=True)
+        raise typer.Exit(code=1) from error
+    counts = ", ".join(f"{count} {kind}" for kind, count in catalog["counts"].items())
+    typer.echo(f"Saved {len(catalog['videos'])} uploads ({counts}) to {destination}")
 
 
 def _copy_line(name: str, section: object) -> str | None:

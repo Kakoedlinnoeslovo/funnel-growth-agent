@@ -90,12 +90,12 @@ def test_missing_asset_and_key_still_returns_title_body_fallback(settings) -> No
     assert cached.model == "title-body-fallback"
 
 
-def test_schema_version_is_four_everywhere_and_v3_caches_rerun(settings, tmp_path: Path) -> None:
+def test_schema_version_is_five_everywhere_and_v4_caches_rerun(settings, tmp_path: Path) -> None:
     from funnel_growth_agent.config import Settings
 
-    assert ANALYSIS_SCHEMA_VERSION == 4
-    assert Settings.__dataclass_fields__["analysis_schema_version"].default == 4
-    assert settings.analysis_schema_version == 4
+    assert ANALYSIS_SCHEMA_VERSION == 5
+    assert Settings.__dataclass_fields__["analysis_schema_version"].default == 5
+    assert settings.analysis_schema_version == 5
     calls = {"n": 0}
 
     def fake_call(_creative: RankedCreative, _asset: Path | None) -> CreativeAnalysis:
@@ -113,11 +113,11 @@ def test_schema_version_is_four_everywhere_and_v3_caches_rerun(settings, tmp_pat
     image = tmp_path / "ad.jpg"
     image.write_bytes(b"one")
     creative = _ranked(imagePath=str(image))
-    settings.analysis_schema_version = 3
-    analyze_creative(creative, settings, call_model=fake_call)
     settings.analysis_schema_version = 4
+    analyze_creative(creative, settings, call_model=fake_call)
+    settings.analysis_schema_version = 5
     cached = analyze_creative(creative, settings, call_model=fake_call)
-    assert calls["n"] == 2 and cached.schema_version == 4
+    assert calls["n"] == 2 and cached.schema_version == 5
     assert cached.analysis.format == "ugc-candid"
 
 
@@ -203,10 +203,10 @@ def test_stale_gemini_cache_is_kept_when_no_model_can_rerun(settings, tmp_path: 
     creative = _ranked(imagePath=str(image))
     settings.analysis_schema_version = 2
     analyze_creative(creative, settings, call_model=fake_call)
-    settings.analysis_schema_version = 3
+    settings.analysis_schema_version = 4
     kept = analyze_creative(creative, settings, call_model=False)
     assert kept.schema_version == 2 and kept.analysis.visual_hook == "gemini saw a strawberry"
     on_disk = (settings.analysis_dir / "ad_1.json").read_text(encoding="utf-8")
     assert "gemini saw a strawberry" in on_disk
     rerun = analyze_creative(creative, settings, call_model=fake_call)
-    assert rerun.schema_version == 3
+    assert rerun.schema_version == 4

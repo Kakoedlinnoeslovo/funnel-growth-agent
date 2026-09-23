@@ -15,7 +15,7 @@ from typing import Literal
 
 from .models import LETTERING_TEXT_RE, ShowcaseImagePlan, VisualFamily
 
-ReferenceKind = Literal["tile", "creative", "previous"]
+ReferenceKind = Literal["tile", "creative", "video", "previous"]
 
 ORDINALS = ("first", "second", "third", "fourth")
 
@@ -296,6 +296,8 @@ class ReferenceRole:
 def reference_kind(ref: str) -> ReferenceKind:
     if ref == "previous":
         return "previous"
+    if ref.startswith("video:"):
+        return "video"
     if ref.startswith("creative:"):
         return "creative"
     return "tile"
@@ -312,6 +314,8 @@ def family_of_medium(medium: str | None) -> VisualFamily | None:
 
 
 def reference_role_sentence(kind: ReferenceKind, ordinal: str, style: MediumStyle) -> str:
+    if kind == "video":
+        return f"The {ordinal} image is an identified frame from the source video. Use it as composition and subject evidence only, never fabricate a product screenshot, endorsement or product capability."
     template = REFERENCE_ROLE[kind]
     if style.people and style.family in {"ugc", "editorial"}:
         template = UGC_REFERENCE_ROLE.get(kind, template)
@@ -345,7 +349,7 @@ def build_tile_prompt(
 ) -> str:
     """The base prompt (variant 0). Raw `prompt` overrides pass through untouched."""
     if plan.prompt:
-        return plan.prompt.strip()
+        return plan.prompt.strip() + image_contract(plan)
     assert plan.brief is not None and plan.medium is not None
     style = style_of(plan.medium)
     brief = " ".join(plan.brief.split()).rstrip(".")
@@ -364,10 +368,11 @@ def build_tile_prompt(
         gallery,
         style.palette_rule.format(palette=_palette_phrase(plan.palette)),
         f"The background is {plan.background or style.background}.",
-        style.composition,
+        plan.composition or style.composition,
     ]
     for index, role in enumerate(references[: len(ORDINALS)]):
         parts.append(reference_role_sentence(role.kind, ORDINALS[index], style))
+    parts.append(image_contract(plan))
     parts.append(trailing_sentence(plan))
     return " ".join(part.strip() for part in parts if part.strip())
 
@@ -396,3 +401,24 @@ def prompt_word_count(text: str) -> int:
 def lettering_text_of(brief: str) -> str | None:
     match = LETTERING_TEXT_RE.search(brief)
     return match.group(1) if match else None
+
+
+def image_contract(plan: ShowcaseImagePlan) -> str:
+    if (
+        not any((plan.composition, plan.intended_message, plan.art_direction))
+        and plan.role == "illustration"
+        and plan.aspect_ratio == "16:9"
+    ):
+        return ""  # Keep old cached briefs byte-for-byte stable.
+    return " " + " ".join(
+        filter(
+            None,
+            [
+                f"Asset role: {plan.role}. Target aspect ratio: {plan.aspect_ratio}.",
+                f"Intended message: {plan.intended_message}." if plan.intended_message else None,
+                f"Shared art direction: {plan.art_direction}." if plan.art_direction else None,
+                f"Composition: {plan.composition}." if plan.prompt and plan.composition else None,
+                "This is a generated illustration, never present it as a real Recraft output or interface screenshot. Keep the subject legible at desktop and phone display sizes.",
+            ],
+        )
+    )

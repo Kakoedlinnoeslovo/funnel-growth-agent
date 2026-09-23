@@ -11,7 +11,7 @@ CAMEL = ConfigDict(extra="forbid", populate_by_name=True, ser_json_by_alias=True
 
 Status = Literal["proposed", "applied", "rejected", "deployed", "measuring", "evaluated"]
 PRIMARY_METRIC = Literal["landing_cta_rate"]
-ExperimentType = Literal["hero_copy", "landing_redesign"]
+ExperimentType = Literal["hero_copy", "landing_redesign", "landing_rebuild"]
 HeroLayout = Literal["copy-first", "video-first"]
 VideoAspect = Literal["16:9", "4:5", "1:1"]
 ImageAspect = Literal["16:9", "4:3", "1:1"]
@@ -359,7 +359,9 @@ ROUTE_TO_MODEL = {
     "nano_banana_2_t2i__falai": "nano_banana_2",
     "nano_banana_pro_t2i__falai": "nano_banana_pro",
 }
-REFERENCE_PATTERN = re.compile(r"^(creative:[A-Za-z0-9_-]{1,40}|tile:[^:]{1,80}:[0-3]|previous)$")
+REFERENCE_PATTERN = re.compile(
+    r"^(creative:[A-Za-z0-9_-]{1,40}|tile:[^:]{1,80}:[0-3]|video:[A-Za-z0-9_-]{1,40}:[0-9]+(?:\.[0-9]+)?|previous)$"
+)
 COLOUR_PATTERN = re.compile(r"^(#[0-9a-fA-F]{6}|[A-Za-z][A-Za-z -]{1,30})$")
 LETTERING_TEXT_RE = re.compile(r'"([^"]{1,40})"')
 MAX_STYLE_REFS = 3
@@ -381,7 +383,14 @@ class ShowcaseImagePlan(BaseModel):
     palette: list[str] = Field(default_factory=list, max_length=3)
     background: str | None = Field(default=None, max_length=120)
     references: list[str] = Field(default_factory=list, max_length=MAX_STYLE_REFS)
-    tile_model: TileModel = Field(default="nano_banana_pro", alias="model")
+    role: Literal["illustration", "hero", "gallery", "comparison"] = "illustration"
+    aspect_ratio: Literal["1:1", "4:3", "3:4", "16:9", "9:16"] = Field(
+        default="16:9", alias="aspectRatio"
+    )
+    composition: str | None = Field(default=None, max_length=600)
+    intended_message: str | None = Field(default=None, alias="intendedMessage", max_length=500)
+    art_direction: str | None = Field(default=None, alias="artDirection", max_length=1200)
+    tile_model: TileModel = Field(default="nano_banana_2", alias="model")
     prompt: str | None = Field(default=None, min_length=20, max_length=1200)
 
     @model_validator(mode="before")
@@ -390,9 +399,10 @@ class ShowcaseImagePlan(BaseModel):
         if not isinstance(value, dict):
             return value
         data = dict(value)
-        data.pop("aspectRatio", None)
-        data.pop("aspect_ratio", None)
         route = data.pop("route", None)
+        if route is not None:
+            data.pop("aspectRatio", None)
+            data.pop("aspect_ratio", None)  # Legacy routes always generated 16:9.
         if route is not None and "model" not in data and "tile_model" not in data:
             if route not in ROUTE_TO_MODEL:
                 raise ValueError(f"unknown route {route!r}")
@@ -413,7 +423,7 @@ class ShowcaseImagePlan(BaseModel):
         for item in value:
             if not REFERENCE_PATTERN.match(item):
                 raise ValueError(
-                    f"reference {item!r} must be creative:<id>, tile:<group label>:<0-3> or previous"
+                    f"reference {item!r} must be creative:<id>, tile:<group label>:<0-3> video:<creativeId>:<seconds> or previous"
                 )
         if len(set(value)) != len(value):
             raise ValueError("references repeat")
@@ -430,8 +440,6 @@ class ShowcaseImagePlan(BaseModel):
                 raise ValueError("a brief needs a palette of 2 or 3 colours")
             if self.medium == "lettering" and self.lettering_text is None:
                 raise ValueError('a lettering brief must put the exact words in "double quotes"')
-        if self.references and self.tile_model == "nano_banana_2":
-            raise ValueError("nano_banana_2 takes no references; use nano_banana_pro")
         return self
 
     @property
@@ -489,13 +497,85 @@ class RedesignChanges(BaseModel):
         return self
 
 
-Changes = HeroCopyChanges | RedesignChanges
+class PageItem(BaseModel):
+    model_config = CAMEL
+    title: str = Field(min_length=1, max_length=200)
+    body: str = Field(default="", max_length=1500)
+
+
+class PageBlock(BaseModel):
+    model_config = CAMEL
+    id: str = Field(pattern=SECTION_ID_PATTERN)
+    kind: Literal["hero", "gallery", "features", "steps", "comparison", "proof", "faq", "cta"]
+    headline: str = Field(min_length=1, max_length=200)
+    body: str = Field(default="", max_length=2000)
+    cta_label: str = Field(default="Start creating", alias="ctaLabel", min_length=1, max_length=80)
+    layout: Literal["split", "centered", "media-first"] = "split"
+    items: list[PageItem] = Field(default_factory=list, max_length=8)
+    images: list[str] = Field(default_factory=list, max_length=4)
+    video_source_section_id: str | None = Field(default=None, alias="videoSourceSectionId")
+    hidden: bool = False
+    source_section_id: str | None = Field(default=None, alias="sourceSectionId")
+
+    @model_validator(mode="after")
+    def content(self):
+        if self.kind in {"features", "steps", "faq"} and len(self.items) < 2:
+            raise ValueError("Features, workflow and FAQ blocks need at least two items")
+        if self.kind == "faq" and any(not item.body.strip() for item in self.items):
+            raise ValueError("FAQ questions need answers")
+        if self.kind == "hero" and len(self.images) > 1:
+            raise ValueError("The hero has one image slot; use a gallery for multiple images")
+        if self.images and self.kind not in {"hero", "gallery", "comparison", "features"}:
+            raise ValueError("This block type does not render images")
+        return self
+
+
+class PageBlueprint(BaseModel):
+    model_config = CAMEL
+    schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
+    theme: Literal["clean-light", "warm-editorial", "dark-showcase"]
+    art_direction: str = Field(alias="artDirection", min_length=1, max_length=1200)
+    blocks: list[PageBlock] = Field(min_length=4, max_length=12)
+    media: MediaPlan | None = None
+
+    @model_validator(mode="after")
+    def structure(self):
+        if self.blocks[0].kind != "hero" or self.blocks[-1].kind != "cta":
+            raise ValueError("A page blueprint starts with a hero and ends with a CTA")
+        if self.blocks[0].hidden or self.blocks[-1].hidden:
+            raise ValueError("Hero and final CTA must stay visible")
+        if len({b.id for b in self.blocks}) != len(self.blocks):
+            raise ValueError("Blueprint block ids must be unique")
+        if sum(b.kind == "hero" for b in self.blocks) != 1:
+            raise ValueError("A blueprint has exactly one hero")
+        if len({b.kind for b in self.blocks[1:-1] if not b.hidden}) < 2:
+            raise ValueError("Heavy redesign needs at least two distinct body block types")
+        if self.media:
+            blocks_by_id = {block.id: block for block in self.blocks}
+            for asset in self.media.showcase:
+                block = blocks_by_id.get(asset.group)
+                if block is None or block.kind not in {"hero", "gallery", "comparison", "features"}:
+                    raise ValueError("An image plan must target a block that renders images")
+                if block.kind == "hero" and asset.slot != 0:
+                    raise ValueError("The hero has only image slot 0")
+                if not asset.art_direction:
+                    asset.art_direction = self.art_direction
+                if not asset.intended_message:
+                    asset.intended_message = block.headline
+                if asset.role == "illustration" and block.kind in {"hero", "gallery", "comparison"}:
+                    asset.role = block.kind
+        return self
+
+
+Changes = HeroCopyChanges | RedesignChanges | PageBlueprint
 
 
 def coerce_changes(experiment_type: Any, raw: Any) -> Any:
     """Pick the changes model from experimentType; both models accept `{}` so no smart union."""
     if raw is None:
         return None
+    if experiment_type == "landing_rebuild":
+        return raw if isinstance(raw, PageBlueprint) else PageBlueprint.model_validate(raw)
     if experiment_type == "landing_redesign":
         return raw if isinstance(raw, RedesignChanges) else RedesignChanges.model_validate(raw)
     if experiment_type == "hero_copy":
@@ -512,6 +592,22 @@ def _pick_changes(value: Any) -> Any:
     return value
 
 
+class InterpretedBrief(BaseModel):
+    model_config = CAMEL
+    audience: str
+    promise: str
+    objections: list[str] = Field(default_factory=list, max_length=8)
+    design_direction: str = Field(alias="designDirection")
+
+
+class CompetitorAdaptation(BaseModel):
+    model_config = CAMEL
+    source_url: str = Field(alias="sourceUrl")
+    observed_pattern: str = Field(alias="observedPattern")
+    why_it_fits: str = Field(alias="whyItFits")
+    recraft_adaptation: str = Field(alias="recraftAdaptation")
+
+
 class LandingProposal(BaseModel):
     """Claude output when it proposes an experiment."""
 
@@ -524,6 +620,10 @@ class LandingProposal(BaseModel):
     hypothesis: str
     primary_metric: PRIMARY_METRIC = Field(alias="primaryMetric")
     changes: Changes
+    interpreted_brief: InterpretedBrief | None = Field(default=None, alias="interpretedBrief")
+    competitor_adaptations: list[CompetitorAdaptation] = Field(
+        default_factory=list, alias="competitorAdaptations", max_length=8
+    )
     other_ideas: list[str] = Field(default_factory=list, alias="otherIdeas")
 
     @model_validator(mode="before")
@@ -538,6 +638,10 @@ class NoExperiment(BaseModel):
     decision: Literal["no_experiment"] = "no_experiment"
     reason: str
     # The model often still lists what it would try next; keep it instead of failing.
+    interpreted_brief: InterpretedBrief | None = Field(default=None, alias="interpretedBrief")
+    competitor_adaptations: list[CompetitorAdaptation] = Field(
+        default_factory=list, alias="competitorAdaptations", max_length=8
+    )
     other_ideas: list[str] = Field(default_factory=list, alias="otherIdeas")
 
 
@@ -597,6 +701,51 @@ class RankedCreative(BaseModel):
     reason_selected: str = Field(alias="reasonSelected")
 
 
+class VideoMoment(BaseModel):
+    model_config = CAMEL
+    start: float = Field(ge=0)
+    end: float = Field(ge=0)
+    kind: Literal["hook", "demonstration", "payoff", "cta", "scene"] = "scene"
+    description: str
+    visible_text: list[str] = Field(default_factory=list, alias="visibleText")
+    spoken_text: list[str] = Field(default_factory=list, alias="spokenText")
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.end < self.start:
+            raise ValueError("Video moment ends before it starts")
+        return self
+
+
+class VideoEvidence(BaseModel):
+    model_config = CAMEL
+    concept: str
+    narrative: str
+    method: Literal["video_audio", "visual_only"] = "video_audio"
+    duration: float = Field(gt=0)
+    fps: float = 2
+    audio_available: bool = Field(default=False, alias="audioAvailable")
+    covered_intervals: list[tuple[float, float]] = Field(
+        default_factory=list, alias="coveredIntervals"
+    )
+    moments: list[VideoMoment] = Field(default_factory=list)
+    landing_implications: list[str] = Field(default_factory=list, alias="landingImplications")
+    candidate_clips: list[tuple[float, float]] = Field(default_factory=list, alias="candidateClips")
+    observed_actions: list[str] = Field(default_factory=list, alias="observedActions")
+    advertised_claims: list[str] = Field(default_factory=list, alias="advertisedClaims")
+    limitations: list[str] = Field(default_factory=list)
+    storyboard: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def bounds(self):
+        if any(m.end > self.duration for m in self.moments):
+            raise ValueError("Video evidence timestamp exceeds the video duration")
+        for start, end in [*self.covered_intervals, *self.candidate_clips]:
+            if not 0 <= start < end <= self.duration:
+                raise ValueError("Video interval is outside the original video")
+        return self
+
+
 class CreativeAnalysis(BaseModel):
     model_config = CAMEL
 
@@ -616,6 +765,7 @@ class CreativeAnalysis(BaseModel):
     format: VisualFormat | None = None
     has_real_person: bool | None = Field(default=None, alias="hasRealPerson")
     camera_feel: CameraFeel | None = Field(default=None, alias="cameraFeel")
+    video_evidence: VideoEvidence | None = Field(default=None, alias="videoEvidence")
 
     @field_validator("visible_text", "product_claims", "palette", "visual_elements", mode="before")
     @classmethod
@@ -701,6 +851,10 @@ class SavedProposal(BaseModel):
     hypothesis: str | None = None
     primary_metric: PRIMARY_METRIC | None = Field(default=None, alias="primaryMetric")
     changes: Changes | None = None
+    interpreted_brief: InterpretedBrief | None = Field(default=None, alias="interpretedBrief")
+    competitor_adaptations: list[CompetitorAdaptation] = Field(
+        default_factory=list, alias="competitorAdaptations", max_length=8
+    )
     other_ideas: list[str] = Field(default_factory=list, alias="otherIdeas")
     reason: str | None = None
 
@@ -762,6 +916,7 @@ class CandidateScore(BaseModel):
     cleanliness: int = Field(default=0, ge=0, le=10)
     crop_safety: int = Field(default=0, ge=0, le=10, alias="cropSafety")
     palette_adherence: int = Field(default=0, ge=0, le=10, alias="paletteAdherence")
+    brief_relevance: int | None = Field(default=None, ge=0, le=10, alias="briefRelevance")
     notes: str = ""
     total: float = 0.0
 

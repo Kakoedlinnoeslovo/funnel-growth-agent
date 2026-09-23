@@ -76,7 +76,8 @@ def score_proposal(
         "no_unsupported_claim": no_claim,
         "not_duplicate": not_duplicate,
         "would_test": would_test,
-        "experiment_type_ok": experiment_type in {None, "hero_copy", "landing_redesign"},
+        "experiment_type_ok": experiment_type
+        in {None, "hero_copy", "landing_redesign", "landing_rebuild"},
     }
 
 

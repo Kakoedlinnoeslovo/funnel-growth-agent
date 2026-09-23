@@ -122,6 +122,17 @@ def workflow(settings):
     instance.close()
 
 
+def test_reopened_draft_has_current_media_library_without_rewriting_history(workflow):
+    created = create(workflow)
+    draft = workflow.load(created["id"])
+    draft["context"] = {"media": {"youtube": [{"videoId": "old-snapshot"}]}}
+    workflow.save(draft)
+    view = workflow.present(created["id"])
+    assert len(view["mediaLibrary"]["youtube"]) > 13
+    assert view["mediaLibrary"]["youtubeIndex"]["indexedAt"]
+    assert workflow.load(created["id"])["context"] == draft["context"]
+
+
 def create(workflow, *, base="v7", ids=None, adset=None):
     catalog = workflow.catalog()
     baseline = next(row for row in catalog["baselines"] if row["version"] == base)
@@ -668,7 +679,7 @@ def test_http_workflow_api_and_origin_protection(workflow):
 
     try:
         code, page = request("GET", "/")
-        assert code == 200 and b"Create another version" in page
+        assert code == 200 and b"Message your growth agent" in page
         code, body = request("GET", "/api/catalog")
         catalog = json.loads(body)
         assert code == 200 and len(catalog["adsets"]) == 2
@@ -692,3 +703,203 @@ def test_http_workflow_api_and_origin_protection(workflow):
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_durable_events_resume_without_duplicates_and_stay_in_their_draft(workflow):
+    first = create(workflow)
+    second = create(workflow)
+    first = job(workflow, first, "generate")
+    events = workflow.events_after(first["id"])
+    assert [e["seq"] for e in events] == list(range(1, len(events) + 1))
+    assert len({e["operationId"] for e in events}) == 1
+    assert events[0]["kind"] == "operation_started"
+    assert events[-1]["kind"] == "operation_completed"
+    assert events[-1]["data"]["busy"] is None
+    assert events[-1]["data"]["readyRevision"] == 1
+    assert all(e["stage"] != "publish" for e in events)
+    assert workflow.events_after(first["id"], events[2]["seq"]) == events[3:]
+    assert workflow.events_after(second["id"]) == []
+    restored = Workflow(workflow.settings)
+    try:
+        assert restored.events_after(first["id"], events[-2]["seq"]) == events[-1:]
+    finally:
+        restored.close()
+
+
+def test_legacy_events_get_stable_cursors_and_interruption_is_terminal(workflow):
+    draft = workflow.load(create(workflow)["id"])
+    draft["events"] = [{"kind": "analyzing", "data": {}, "at": "2026-01-01T00:00:00Z"}]
+    draft["status"] = "researching"
+    draft["retry"] = {"action": "research", "payload": {}}
+    workflow.save(draft)
+    restored = Workflow(workflow.settings)
+    try:
+        events = restored.events_after(draft["id"])
+        assert [e["seq"] for e in events] == [1, 2]
+        assert events[0]["operationId"] == "legacy"
+        assert events[-1]["kind"] == "operation_failed"
+        assert events[-1]["data"]["busy"] is None
+    finally:
+        restored.close()
+
+
+def test_structured_edits_preserve_copy_and_reject_conflicting_modes(workflow):
+    draft = job(workflow, create(workflow), "generate")
+    previous = draft["revisions"][0]["proposal"]["changes"]
+    calls = len(workflow.model.calls)
+    draft = job(
+        workflow,
+        draft,
+        "revise",
+        {"expectedRevision": 1, "changes": {"layout": {"layout": "copy-first"}}},
+    )
+    assert draft["status"] == "ready", draft["error"]
+    assert draft["revisions"][-1]["proposal"]["changes"]["copy"] == previous["copy"]
+    assert len(workflow.model.calls) == calls
+    with pytest.raises(ValueError, match="separately"):
+        workflow.start_job(
+            draft["id"],
+            "revise",
+            {
+                "expectedRevision": 2,
+                "instruction": "change it",
+                "changes": {"layout": {"stickyCta": True}},
+            },
+        )
+    assert workflow.busy is None
+    editing = workflow.present(draft["id"])["editing"]
+    assert "copy-first" in {p["id"] for p in editing["presets"]}
+    assert "visual-first" not in {p["id"] for p in editing["presets"]}
+    assert editing["sections"][0]["layoutOptions"] == ["copy-first"]
+    assert editing["sections"][0]["copyKey"] == "hero"
+
+
+def test_failed_revision_terminates_event_stream_and_keeps_preview(workflow):
+    draft = job(workflow, create(workflow), "generate")
+    workflow.builder.fail = True
+    draft = job(
+        workflow,
+        draft,
+        "revise",
+        {"expectedRevision": 1, "copy": {"hero": {"ctaLabel": "Keep creating"}}},
+    )
+    view = workflow.present(draft["id"])
+    assert view["status"] == "failed" and view["previewUrl"]
+    assert view["readyRevision"] == 1
+    assert view["events"][-1]["kind"] == "operation_failed"
+    assert view["events"][-1]["data"]["busy"] is None
+    assert len({e["operationId"] for e in view["events"]}) == 2
+
+
+def test_freeform_revision_preserves_unspecified_earlier_changes(workflow):
+    draft = job(workflow, create(workflow), "generate")
+    draft = job(
+        workflow,
+        draft,
+        "revise",
+        {"expectedRevision": 1, "copy": {"hero": {"reassurance": "Your earlier edit"}}},
+    )
+    workflow.model = ScriptedModel(
+        redesign_proposal(
+            media=None,
+            layout=None,
+            composition=None,
+            copy={"hero": {"headline": ["A fresh opening"]}},
+        )
+    )
+    draft = job(
+        workflow,
+        draft,
+        "revise",
+        {"expectedRevision": 2, "instruction": "Change only the headline"},
+    )
+    assert draft["status"] == "ready", draft.get("error")
+    copy_changes = draft["revisions"][-1]["proposal"]["changes"]["copy"]
+    assert copy_changes["hero"]["headline"] == ["A fresh opening"]
+    assert copy_changes["hero"]["reassurance"] == "Your earlier edit"
+    assert copy_changes["finalCta"]["ctaLabel"]
+
+
+def test_artifact_projection_allows_only_media_under_owned_roots(workflow, tmp_path):
+    image = workflow.settings.data_dir / "research" / "desktop.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"png")
+    secret = workflow.settings.data_dir / "key.txt"
+    secret.write_text("not-an-artifact")
+    other = tmp_path / "outside.png"
+    other.write_bytes(b"not-in-data")
+    data = workflow.present_artifacts(
+        {"screenshots": [str(image), str(secret), str(other)], "path": str(image)}
+    )
+    assert data["screenshots"][0].startswith("/api/assets/")
+    assert data["screenshots"][1:] == [None, None]
+    assert data["imageUrl"] == data["screenshots"][0]
+    draft = workflow.load(create(workflow)["id"])
+    draft["context"] = {"competitors": [{"screenshots": [str(image)]}]}
+    workflow.save(draft)
+    restored = Workflow(workflow.settings)
+    try:
+        key = data["imageUrl"].removeprefix("/api/assets/")
+        assert restored.asset_paths[key] == image
+    finally:
+        restored.close()
+
+
+def test_draft_sse_respects_last_event_id(workflow):
+    draft = job(workflow, create(workflow), "generate")
+    last = draft["events"][-1]
+    server = make_server(
+        workflow.settings, recording=None, live=True, port=0, preview_base="http://127.0.0.1:9/pm"
+    )
+    server.workflow = workflow
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=3)
+    try:
+        conn.request(
+            "GET",
+            f"/api/drafts/{draft['id']}/events?after=0",
+            headers={"Last-Event-ID": str(last["seq"] - 1)},
+        )
+        response = conn.getresponse()
+        assert response.status == 200
+        assert response.readline().decode().strip() == f"id: {last['seq']}"
+        assert json.loads(
+            response.readline().decode().removeprefix("data: ")
+        ) == workflow.present_event(last)
+    finally:
+        conn.close()
+        workflow.close()
+        server.shutdown()
+        server.server_close()
+
+
+def test_audience_projection_keeps_sources_separate_and_missing_values_null():
+    from funnel_growth_agent.workflow_audience import audience_for_selection
+
+    report = {
+        "creatives": [{"ad_id": "a", "payments": 0, "payers": 2, "spend_usd": 9}],
+        "creative_audience": {
+            "schema_version": 1,
+            "breakdowns": {
+                "country": {
+                    "rows": [
+                        {"ad_id": "a", "meta_purchases": 4},
+                        {"ad_id": "b", "meta_purchases": 99},
+                    ]
+                }
+            },
+            "creative_funnels": [{"ad_id": "b"}],
+        },
+    }
+    view = audience_for_selection(
+        report,
+        [{"id": "a", "name": "Selected"}, {"id": "upload", "name": "Uploaded", "source": "upload"}],
+    )
+    assert view["status"] == "observed"
+    assert view["outcomes"][0]["posthogPayments"] == 0
+    assert view["outcomes"][0]["warehousePayers"] == 2
+    assert view["outcomes"][1]["posthogPayments"] is None
+    assert view["breakdowns"]["country"]["rows"] == [{"ad_id": "a", "meta_purchases": 4}]
+    assert view["creative_funnels"] == []
+    assert len(report["creative_audience"]["breakdowns"]["country"]["rows"]) == 2

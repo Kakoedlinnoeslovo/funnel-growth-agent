@@ -141,6 +141,9 @@ def check_landing_diff(
 ) -> list[str]:
     """Return a human summary of allowed changes; raise ApplyError on anything else."""
     produced = produced or ProducedFiles()
+    if (new_doc.get("props") or {}).get("growthDesign"):
+        from .blueprint import validate_rebuild_diff
+        return validate_rebuild_diff(old_doc, new_doc, produced)
     outside = changed_keys(_without_sections(old_doc), _without_sections(new_doc))
     if outside:
         raise ApplyError(f"hard-diff allowlist: landing.yaml changed outside sections {outside}")

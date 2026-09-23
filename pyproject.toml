@@ -38,6 +38,8 @@ packages = ["src/funnel_growth_agent"]
 "src/funnel_growth_agent/demo/workflow.html" = "funnel_growth_agent/demo/workflow.html"
 "src/funnel_growth_agent/demo/workflow.js" = "funnel_growth_agent/demo/workflow.js"
 "src/funnel_growth_agent/demo/workflow.css" = "funnel_growth_agent/demo/workflow.css"
+"src/funnel_growth_agent/demo/instrument-sans.woff2" = "funnel_growth_agent/demo/instrument-sans.woff2"
+"src/funnel_growth_agent/demo/instrument-sans-OFL.txt" = "funnel_growth_agent/demo/instrument-sans-OFL.txt"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

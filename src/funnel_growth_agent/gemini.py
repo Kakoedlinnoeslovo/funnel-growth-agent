@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -14,7 +15,7 @@ from .config import Settings
 from .models import CachedCreativeAnalysis, CreativeAnalysis, RankedCreative
 
 # Bump when the describe prompt or CreativeAnalysis gains fields; cached reads re-run.
-ANALYSIS_SCHEMA_VERSION = 4
+ANALYSIS_SCHEMA_VERSION = 5
 
 ModelCall = Callable[[RankedCreative, Path | None], CreativeAnalysis]
 
@@ -50,6 +51,10 @@ def _gemini_call(
 ) -> CreativeAnalysis:
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is not set")
+    if asset and asset.suffix.lower() in {".mp4", ".webm", ".mov"}:
+        from .video_analysis import analyze_video
+
+        return analyze_video(asset, settings)
     from google import genai
     from google.genai import types
 
@@ -65,8 +70,7 @@ def _gemini_call(
                 "visibleText must contain only text actually readable in the supplied image/video, "
                 "never filenames or metadata. Return [] for a blank frame or no visible text. "
                 "ctaIntent is an inference, not a quotation: say unspecified when no action is "
-                "supported. For an opening video frame, describe only that frame; do not assume "
-                "later scenes or a CTA exist. A blank image is valid evidence, not an error.\n\n"
+                "supported. Describe only the supplied image. A blank image is valid evidence, not an error.\n\n"
                 f"ad_name: {creative.ad_name}\n"
                 f"title: {creative.title}\n"
                 f"body: {creative.body}\n"
@@ -116,20 +120,32 @@ def analyze_creative(
     refresh: bool = False,
 ) -> CachedCreativeAnalysis:
     asset = None
-    for candidate in (creative.image_path, creative.video_path):
+    for candidate in (creative.video_path, creative.image_path):
         if candidate:
             path = Path(candidate)
             if path.is_file():
                 asset = path
                 break
     fingerprint = asset_fingerprint(asset)
+    if asset and asset.suffix.lower() in {".mp4", ".webm", ".mov"}:
+        from .video_analysis import video_fingerprint
+
+        fingerprint = video_fingerprint(
+            asset, settings.gemini_model, settings.analysis_schema_version
+        )
     cache_file = _cache_path(settings, creative.creative_id)
     stale: CachedCreativeAnalysis | None = None
     if not refresh and cache_file.is_file():
         cached = CachedCreativeAnalysis.model_validate_json(cache_file.read_text(encoding="utf-8"))
         if cached.asset_fingerprint == fingerprint:
             if cached.schema_version == settings.analysis_schema_version:
-                return cached
+                is_video = bool(asset and asset.suffix.lower() in {".mp4", ".webm", ".mov"})
+                if (
+                    not is_video
+                    or (cached.analysis.video_evidence and cached.model != "title-body-fallback")
+                    or not call_model
+                ):
+                    return cached
             stale = cached
 
     analysis: CreativeAnalysis
@@ -164,6 +180,17 @@ def analyze_creative(
             analysis = _fallback(creative)
             model_name = "title-body-fallback"
 
+    if (
+        asset
+        and asset.suffix.lower() in {".mp4", ".webm", ".mov"}
+        and analysis.video_evidence is None
+    ):
+        from .video_analysis import unavailable_video_evidence
+
+        try:
+            analysis.video_evidence = unavailable_video_evidence(asset, settings)
+        except (ValueError, OSError, subprocess.TimeoutExpired):
+            pass  # An unreadable local file must not discard the draft.
     record = CachedCreativeAnalysis(
         creative_id=creative.creative_id,
         asset_fingerprint=fingerprint,

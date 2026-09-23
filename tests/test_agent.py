@@ -53,7 +53,16 @@ def test_malformed_json_text_is_retried_as_schema_tool(monkeypatch, settings):
     assert len(requests) == 2
     assert requests[1]["tool_choice"] == {"type": "tool", "name": "submit_proposal"}
     assert requests[1]["messages"][0]["content"] == "Use only these saved creatives."
-    assert [kind for kind, _ in events] == ["model_output_retry", "proposal"]
+    assert [kind for kind, _ in events] == [
+        "model_request_started",
+        "model_request_completed",
+        "model_output_retry",
+        "model_request_started",
+        "model_request_completed",
+        "proposal",
+    ]
+    assert events[0][1]["id"] == events[1][1]["id"]
+    assert events[3][1]["id"] == events[4][1]["id"] != events[0][1]["id"]
     schema = requests[0]["tools"][-1]["input_schema"]
     assert schema["required"] == ["proposal"]
     assert "LandingProposal" in schema["$defs"]

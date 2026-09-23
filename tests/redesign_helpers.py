@@ -71,6 +71,7 @@ class FakeImages:
         references: list[ResolvedReference],
         seeds: list[int],
         dests: list[Path],
+        aspect_ratio: str = "16:9",
     ) -> list[Path]:
         self.calls.append(
             {
