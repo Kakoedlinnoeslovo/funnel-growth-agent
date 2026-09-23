@@ -8,13 +8,22 @@ dist/
 data/memory/runs.jsonl
 data/creative_analysis/*.json
 data/media_cache/
+data/youtube_catalog.json
 data/research/
 data/tmp/
 data/demo/
 data/drafts/
 data/uploads/
+# Isolated artifacts from live workspace verification.
+data/workspace-verification/
 # Clean data dir for demo recordings (holds downloaded clips and screenshots).
 data-demo/
 .superpowers/
 .DS_Store
 .gstack/
+.worktrees/
+.claude/worktrees/
+
+data/acceptance/
+
+data/creative_analysis/video/
