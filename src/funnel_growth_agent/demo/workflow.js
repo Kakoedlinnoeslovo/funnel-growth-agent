@@ -171,7 +171,9 @@ function screenshots(value) {
 }
 function researchCard(record) {
   const sources = record.context?.competitors || [], partial = sources.filter(s => s.error || ['partial','failed','blocked'].includes(s.status)).length;
+  const inspected = sources.filter(s => s.inspected || s.pageText || s.screenshots?.length).length, understood = sources.filter(s => s.read).length;
   return disclosure(`Research · ${sources.length} source${sources.length === 1 ? '' : 's'}`,body => {
+    body.append(el('p','small muted',`${sources.filter(s => s.url).length} discovered · ${inspected} inspected · ${understood} visually understood`));
     const problems = new Map();
     for (const source of sources) if (source.error) { const key = friendlyError(source.error); if (!problems.has(key)) problems.set(key,[]); problems.get(key).push(source.competitorName || source.competitor || hostLabel(source.url)); }
     for (const [message,names] of problems) body.append(el('p','notice',message + ' Affected: ' + names.join(', ') + '.'));
@@ -180,10 +182,12 @@ function researchCard(record) {
       const name = source.competitorName || source.competitor || hostLabel(source.url);
       const card = disclosure(name,entry => {
         if (source.url) entry.append(link('Open ' + hostLabel(source.url) + ' ↗',source.url));
-        const kind = source.sourceKind === 'ad_destination' ? 'Observed ad destination' : source.sourceKind === 'ads_library' ? 'Ad Library' : 'Reference page';
+        const kind = ({first_party:'Recraft product evidence',competitor:'Campaign competitor',adjacent:'Adjacent workflow reference',discovery:'Discovery'})[source.sourceKind] || (source.sourceKind === 'ad_destination' ? 'Observed ad destination' : source.sourceKind === 'ads_library' ? 'Ad Library' : 'Reference page');
         entry.append(el('p','small muted',kind + ' · ' + (source.status || 'Status unavailable').replaceAll('_',' ')));
         const adaptations = record.proposal?.competitorAdaptations?.filter(row => hostLabel(row.sourceUrl) === hostLabel(source.url)) || [];
         for (const row of adaptations) { fact(entry,'Observed pattern',row.observedPattern); fact(entry,'Why it fits',row.whyItFits); fact(entry,'Recraft adaptation',row.recraftAdaptation); }
+        if (source.selectionReason) fact(entry,'Why this source',source.selectionReason);
+        if (source.queries?.length) fact(entry,'Searches',source.queries);
         const read = source.read || {};
         fact(entry,'Observed headline',read.heroHeadline); fact(entry,'Primary CTA',read.primaryCta);
         for (const [key,title] of [['notablePatterns','Patterns'],['sectionSequence','Section order'],['heroComposition','Hero'],['typography','Typography'],['spacing','Spacing'],['proofPlacement','Proof placement'],['ctaRepetition','Calls to action'],['phoneDifferences','Mobile differences']]) if (read[key]?.length) fact(entry,title,read[key].map ? read[key].map(row => typeof row === 'string' ? row : JSON.stringify(row)) : read[key]);
@@ -383,8 +387,8 @@ function renderConversation() {
 }
 function elapsed(start) { const seconds = Math.max(0,Math.floor((Date.now() - Date.parse(start || '')) / 1000)); if (!Number.isFinite(seconds)) return ''; return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`; }
 
-function researchConfig() { const urls = id => $(id).value.split(/\n/).map(s => s.trim()).filter(Boolean); return {competitors:[...document.querySelectorAll('.competitor-options input:checked')].map(i => i.value),country:$('research-country').value,adLibraryUrls:urls('research-ad-urls'),landingUrls:urls('research-landing-urls'),refresh:$('research-refresh').checked}; }
-function updateResearchSummary() { const config = researchConfig(); $('research-summary-label').textContent = `${config.competitors.length + config.landingUrls.length} selected`; }
+function researchConfig() { const urls = id => $(id).value.split(/\n/).map(s => s.trim()).filter(Boolean); return {discovery:'auto',competitors:urls('research-competitors'),excludedDomains:urls('research-exclusions'),country:$('research-country').value,adLibraryUrls:urls('research-ad-urls'),landingUrls:urls('research-landing-urls'),refresh:$('research-refresh').checked}; }
+function updateResearchSummary() { const config = researchConfig(); $('research-summary-label').textContent = `Auto discovery · ${config.competitors.length} prioritized · ${config.landingUrls.length} references`; }
 function renderCreatives() {
   if (!catalog) return;
   const query = $('creative-search').value.trim().toLowerCase(); const rows = catalog.creatives.filter(row => [row.name,row.adsetName,row.campaignName,row.title].join(' ').toLowerCase().includes(query));
@@ -433,7 +437,7 @@ async function fresh(base = '') {
   $('setup').hidden = false; $('draft-title').textContent = 'New landing'; $('draft-status').hidden = true; $('draft-meta').textContent = '';
   for (const id of ['publish','public-link','use-baseline','refresh-publication','retry','generate-saved','edit-page','draft-notice','show-directions']) $(id).hidden = true;
   $('history-menu').hidden = true; $('toggle-history').setAttribute('aria-expanded','false'); $('baseline').value = base;
-  $('change-level').value = 'medium'; $('adset').value = ''; $('creative-search').value = ''; restoreInput(); selectBaseline(); renderCreatives(); setWorkspaceTab('chat'); $('chat-scroll').scrollTop = 0;
+  $('change-level').value = 'auto'; $('adset').value = ''; $('creative-search').value = ''; restoreInput(); selectBaseline(); renderCreatives(); setWorkspaceTab('chat'); $('chat-scroll').scrollTop = 0;
 }
 async function openDraft(id, preserveComposer = false) {
   rememberView(); const token = ++activeRequest; stopStream(); error(''); const draft = await api('/api/drafts/' + id); if (token !== activeRequest) return;
@@ -449,7 +453,7 @@ function updateComposer() {
   const base = catalog?.baselines.find(row => row.version === $('baseline').value);
   $('generate').disabled = blocked || (!active && !base?.supported) || (!text && (active || !selected.size));
   $('new-version').disabled = busy || uploading || sending; $('attach-creatives').hidden = !!active; $('change-level').disabled = blocked;
-  const level = $('change-level').value; $('level-description').textContent = {light:'Copy only. Preserve layout, theme and imagery.',medium:'Copy, supported layouts, section order and media.',heavy:'Explore three directions, then choose a composition.'}[level];
+  const level = $('change-level').value; $('level-description').textContent = {auto:'New audience or task: rebuild the page. Specific edits: keep them local.',light:'Copy only. Preserve layout, theme and imagery.',medium:'Copy, supported layouts, section order and media.',heavy:'Explore three directions, then choose a composition.'}[level];
   $('composer-status').textContent = previewRevision ? `Viewing revision ${previewRevision}. Select Latest to chat or edit.` : sending ? 'Sending your message…' : uploading ? 'Preparing your upload…' : busy ? 'Working — keep typing; send when this operation finishes.' : !active && !base ? 'Choose a starting page to begin.' : 'Ask to explore. Describe a change to apply it.';
   const context = active ? [active.baseVersion,active.readyRevision ? `Revision ${active.readyRevision}` : 'No generated preview'] : [base?.version,selected.size ? `${selected.size} creatives` : null];
   $('input-context').replaceChildren(...context.filter(Boolean).map(t => el('span','input-chip',t)));
@@ -770,7 +774,7 @@ $('upload-files').onchange = event => uploadFiles(event.target.files);
 for (const name of ['dragenter','dragover']) $('upload-zone').addEventListener(name,event => { event.preventDefault(); $('upload-zone').classList.add('dragging'); });
 for (const name of ['dragleave','drop']) $('upload-zone').addEventListener(name,event => { event.preventDefault(); $('upload-zone').classList.remove('dragging'); });
 $('upload-zone').addEventListener('drop',event => uploadFiles(event.dataTransfer.files));
-for (const id of ['research-country','research-ad-urls','research-landing-urls']) $(id).addEventListener('input',updateResearchSummary);
+for (const id of ['research-country','research-ad-urls','research-landing-urls','research-competitors','research-exclusions']) $(id).addEventListener('input',updateResearchSummary);
 document.querySelectorAll('.competitor-options input').forEach(input => input.addEventListener('change',updateResearchSummary));
 $('goal-prompt').oninput = () => { cacheInput(); updateComposer(); };
 $('change-level').onchange = updateComposer;

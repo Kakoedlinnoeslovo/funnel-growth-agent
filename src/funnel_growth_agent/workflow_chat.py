@@ -10,6 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from .campaign import CampaignBrief
 from .landing import get_current_landing
 from .workflow_audience import audience_for_selection
 
@@ -19,7 +20,7 @@ class ChatRequest(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
     requestId: str = Field(pattern=r"^[a-zA-Z0-9_-]{8,96}$")
     expectedRevision: int = Field(ge=0)
-    changeLevel: Literal["light", "medium", "heavy"] = "medium"
+    changeLevel: Literal["auto", "light", "medium", "heavy"] = "auto"
     retryFailed: bool = False
 
 
@@ -29,6 +30,8 @@ class ChatDecision(BaseModel):
     text: str = Field(min_length=1, max_length=12000)
     instruction: str = Field(default="", max_length=8000)
     agreedBrief: str = Field(default="", max_length=8000)
+    campaignBrief: CampaignBrief | None = None
+    editScope: Literal["copy", "local", "campaign"] = "local"
 
     @model_validator(mode="after")
     def editable(self):
@@ -43,7 +46,12 @@ Choose answer for questions, explanations, comparisons and hypothetical ideas. C
 when the desired change is ambiguous. Choose edit only for a clear request to create or change
 the landing, including confirmation of a specific previously discussed change. A question about
 what could improve is discussion, not permission to generate. Never claim a change already ran.
-The selected Light/Medium/Heavy level is authoritative; explain or clarify requests outside it.
+Explicit Light/Medium/Heavy levels are authoritative. Auto rebuilds for a new audience or
+promoted task and keeps specific edits local. Return campaignBrief whenever the user establishes
+or updates audience/task/outcome/constraints/references; preserve unchanged fields verbatim.
+Explicit user decisions outrank creative inference. Set editScope to copy, local, or campaign.
+Do not add preservation constraints that conflict with changing the campaign. Do not repeatedly
+ask for the next step: use the existing landing CTA destination unless the user changes it.
 For edit, instruction must be a complete actionable brief incorporating the user's agreed
 constraints and the current request. Preserve unspecified prior changes. agreedBrief is an
 updated concise record of explicit user decisions, never speculative suggestions. Leave it
@@ -152,6 +160,7 @@ class ConversationMixin:
             "goal": draft.get("goalPrompt", ""),
             "agreedBrief": draft.get("conversation", {}).get("agreedBrief", ""),
             "changeLevel": request.changeLevel,
+            "campaignBrief": draft.get("campaignBrief"),
             "status": draft["status"],
             "landing": get_current_landing(settings),
             "brief": (revision.get("proposal") or {}).get("interpretedBrief"),
@@ -260,6 +269,10 @@ class ConversationMixin:
             reply.update(text=decision.text, status="completed", action=decision.action)
             if decision.agreedBrief:
                 conversation["agreedBrief"] = decision.agreedBrief
+            if decision.campaignBrief:
+                draft["campaignBrief"] = decision.campaignBrief.model_dump(by_alias=True)
+                draft["campaignBriefOrigin"] = "conversation"
+            draft["editScope"] = decision.editScope
             conversation["status"] = "idle"
             self.save(draft)
             if decision.action == "edit":
@@ -271,6 +284,8 @@ class ConversationMixin:
                         "instruction": decision.instruction,
                         "expectedRevision": request.expectedRevision,
                         "changeLevel": request.changeLevel,
+                        "campaignBrief": draft.get("campaignBrief"),
+                        "editScope": decision.editScope,
                     },
                     message_id=reply_id,
                 )
@@ -305,6 +320,9 @@ class ConversationMixin:
                         "error": draft.get("error"),
                         "changes": revision.get("changeSummary", []),
                         "proposal": revision.get("proposal"),
+                        "campaignBrief": draft.get("campaignBrief"),
+                        "campaignReview": revision.get("renderedReview")
+                        or revision.get("campaignReview"),
                         "analyses": draft.get("analyses", []),
                         "creatives": draft.get("creatives", []),
                         "research": draft.get("research", {}),

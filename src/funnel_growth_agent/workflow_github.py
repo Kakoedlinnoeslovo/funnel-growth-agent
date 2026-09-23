@@ -138,7 +138,7 @@ class GitHubPublisher:
         shutil.copytree(source / "funnels" / variant, version)
         if (load_yaml(version / "steps/landing.yaml").get("props") or {}).get("growthDesign"):
             from .blueprint import require_renderer
-            require_renderer(checkout)
+            require_renderer(checkout, load_yaml(version / "steps/landing.yaml")["props"]["growthDesign"]["schemaVersion"])
         contract_paths = register_version_contracts(checkout, version, variant)
         original_site = (checkout / "funnels/site.yaml").read_bytes()
         patch_site(

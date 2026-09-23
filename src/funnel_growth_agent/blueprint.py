@@ -9,6 +9,8 @@ from pathlib import Path
 from .models import PageBlueprint
 
 CONTRACT = "growth-blocks-v1"
+CAMPAIGN_CONTRACT = "growth-blocks-v2"
+FUNCTIONAL = {"quiz-hero", "plan-preview"}
 PROTECTED = {"quiz-hero", "plan-preview", "press-quotes", "logo-strip"}
 RECIPES = [
     {
@@ -40,15 +42,21 @@ def capabilities(lab: Path) -> dict:
     if not path.is_file():
         return {"contract": None, "available": False}
     result = json.loads(path.read_text())
-    result["available"] = result.get("contract") == CONTRACT and result.get("schemaVersion", 1) == 1
+    result["available"] = (result.get("contract"), result.get("schemaVersion", 1)) in {
+        (CONTRACT, 1),
+        (CAMPAIGN_CONTRACT, 2),
+    }
     result["proposalSchema"] = PageBlueprint.model_json_schema(by_alias=True)
     return result
 
 
-def require_renderer(lab: Path) -> None:
-    if not capabilities(lab).get("available"):
+def require_renderer(lab: Path, schema_version: int = 1) -> None:
+    capability = capabilities(lab)
+    if not capability.get("available") or (
+        schema_version == 2 and capability.get("contract") != CAMPAIGN_CONTRACT
+    ):
         raise ValueError(
-            "Heavy redesign requires growth-blocks-v1 on the pricing lab/deployment branch. Install the shared renderer first; the reviewed page was preserved."
+            f"This redesign requires growth-blocks-v{schema_version} on the pricing lab/deployment branch. Install the shared renderer first; the reviewed page was preserved."
         )
 
 
@@ -78,7 +86,11 @@ def compose_document(
     old = props.get("sections", [])
     by_id = dict(zip(resolve_section_ids(old), old))
     allowed_images = image_refs(old)
-    planned = {(p.group, p.slot) for p in page.media.showcase} if page.media else set()
+    planned = (
+        {(p.group, p.slot) for p in page.media.showcase + page.media.sourced}
+        if page.media
+        else set()
+    )
     known = {b.id for b in page.blocks}
     if any(group not in known for group, _ in planned):
         raise ValueError("Generated images must name a blueprint block id")
@@ -115,6 +127,9 @@ def compose_document(
             by_alias=True, exclude={"source_section_id", "video_source_section_id", "hidden"}
         )
         row["component"] = "growth-block"
+        if page.schema_version == 1:
+            row.pop("variant", None)
+            row.pop("eyebrow", None)
         for ref in row["images"]:
             if ref not in allowed_images:
                 raise ValueError(f"Blueprint image {ref!r} is not an existing baseline asset")
@@ -141,7 +156,14 @@ def compose_document(
         # Never persist empty asset strings: a labeled placeholder is a renderer feature.
         row["images"] = [ref for ref in row["images"] if ref]
         existing_generated = {ref for s in old for ref in s.get("generatedImages", [])}
-        generated = set(produced.showcase.values()) if produced else set()
+        generated = (
+            set(produced.showcase.values()) - set(produced.sourced_credits) if produced else set()
+        )
+        credits = {c["image"]: c for section in old for c in section.get("credits", [])}
+        if produced:
+            credits.update(produced.sourced_credits)
+        if any(ref in credits for ref in row["images"]):
+            row["credits"] = [credits[ref] for ref in row["images"] if ref in credits]
         row["generatedImages"] = [
             ref for ref in row["images"] if ref in existing_generated | generated
         ]
@@ -149,14 +171,17 @@ def compose_document(
     preserved = [
         deepcopy(row)
         for sid, row in by_id.items()
-        if row.get("component") in PROTECTED and sid not in used
+        if row.get("component") in (PROTECTED if page.schema_version == 1 else FUNCTIONAL)
+        and sid not in used
     ]
     sections[-1:-1] = preserved
     props["growthDesign"] = {
-        "schemaVersion": 1,
+        "schemaVersion": page.schema_version,
         "theme": page.theme,
         "artDirection": page.art_direction,
     }
+    if page.tokens:
+        props["growthDesign"]["tokens"] = page.tokens.model_dump(by_alias=True)
     props["sections"] = sections
     return result
 
@@ -173,13 +198,16 @@ def validate_rebuild_diff(old: dict, new: dict, produced) -> list[str]:
     if (
         a != b
         or not design
-        or design.get("schemaVersion") != 1
+        or design.get("schemaVersion") not in {1, 2}
         or design.get("theme") not in {r["theme"] for r in RECIPES}
     ):
         raise ApplyError("Rebuild changed fields outside the versioned landing composition")
     old_ids = dict(zip(resolve_section_ids(old_sections), old_sections))
     for row in old_sections:
-        if row.get("component") in PROTECTED and row not in new_sections:
+        if (
+            row.get("component") in (PROTECTED if design["schemaVersion"] == 1 else FUNCTIONAL)
+            and row not in new_sections
+        ):
             raise ApplyError("Rebuild changed protected quiz, offer or proof data")
     allowed = image_refs(old_sections) | set(produced.all)
     if not image_refs(new_sections) <= allowed:
@@ -196,7 +224,7 @@ def validate_rebuild_diff(old: dict, new: dict, produced) -> list[str]:
                 {
                     k: v
                     for k, v in row.items()
-                    if k not in {"component", "video", "placeholder", "generatedImages"}
+                    if k not in {"component", "video", "placeholder", "generatedImages", "credits"}
                 }
             )
             if row.get("video"):
@@ -220,9 +248,11 @@ def enforce_level(previous: dict | None, current: dict, level: str) -> None:
             raise ValueError("Heavy requires a full page blueprint, not small field changes")
         if previous and "blocks" in previous:
             before, after = previous["blocks"], current["blocks"]
-            if previous.get("theme") == current.get("theme") and before[0].get("layout") == after[
-                0
-            ].get("layout"):
+            if (
+                previous.get("tokens") == current.get("tokens")
+                and previous.get("theme") == current.get("theme")
+                and before[0].get("layout") == after[0].get("layout")
+            ):
                 raise ValueError("Heavy must change the hero composition or visual treatment")
             kinds_before = [b["kind"] for b in before[1:-1]]
             kinds_after = [b["kind"] for b in after[1:-1]]
@@ -238,7 +268,11 @@ def enforce_level(previous: dict | None, current: dict, level: str) -> None:
     if "blocks" in current or "blocks" in previous:
         if not ("blocks" in current and "blocks" in previous):
             raise ValueError("Choose Heavy to replace the page architecture")
-        if current.get("theme") != previous.get("theme"):
+        if (
+            current.get("theme") != previous.get("theme")
+            or current.get("tokens") != previous.get("tokens")
+            or current.get("schemaVersion") != previous.get("schemaVersion")
+        ):
             raise ValueError("Choose Heavy to change the page theme")
         if level == "medium":
             before = {b["id"]: b["kind"] for b in previous["blocks"]}
@@ -286,7 +320,7 @@ def baseline_blueprint(path: Path) -> dict | None:
                 {
                     k: v
                     for k, v in row.items()
-                    if k not in {"component", "video", "placeholder", "generatedImages"}
+                    if k not in {"component", "video", "placeholder", "generatedImages", "credits"}
                 }
             )
             if row.get("video"):
@@ -317,7 +351,12 @@ def summarize_changes(before: dict, after: dict) -> list[str]:
     if old.get("growthDesign") != new.get("growthDesign") and new.get("growthDesign"):
         summary.append("Visual treatment: " + new["growthDesign"]["theme"].replace("-", " "))
     if old_ids != new_ids:
-        summary.append(f"Recomposed the page into {len(new_rows)} sections")
+        added, removed = len(set(new_ids) - set(old_ids)), len(set(old_ids) - set(new_ids))
+        summary.append(
+            f"Replaced page sections: {added} added, {removed} removed"
+            if added or removed
+            else "Reordered existing sections"
+        )
     for sid, row in zip(new_ids, new_rows):
         previous = old_map.get(sid)
         label = row.get("kind", row.get("component", sid)).replace("-", " ")
