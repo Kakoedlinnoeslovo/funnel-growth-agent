@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Protocol
 
@@ -91,6 +92,8 @@ def envelope_from_output(
         hypothesis=output.hypothesis,
         primary_metric=output.primary_metric,
         changes=output.changes,
+        interpreted_brief=output.interpreted_brief,
+        competitor_adaptations=output.competitor_adaptations,
         other_ideas=output.other_ideas,
     )
 
@@ -116,6 +119,7 @@ def propose(
     analyses: list[CachedCreativeAnalysis] | None = None,
     metrics: MetricsSlice | None = None,
     brief: str | None = None,
+    research_records: list[dict] | None = None,
 ) -> SavedProposal:
     """Propose once. `on_event` (kind, data) sees the pipeline as it runs; see events.py."""
     try:
@@ -131,6 +135,7 @@ def propose(
             analyses=analyses,
             metrics=metrics,
             brief=brief,
+            research_records=research_records,
         )
     except Exception as error:
         emit_to(on_event, "propose_failed", {"error": str(error)})
@@ -150,6 +155,7 @@ def _propose(
     analyses: list[CachedCreativeAnalysis] | None,
     metrics: MetricsSlice | None,
     brief: str | None,
+    research_records: list[dict] | None = None,
 ) -> SavedProposal:
     emit_to(
         on_event,
@@ -184,6 +190,19 @@ def _propose(
             "landingHash": landing_sha,
         },
     )
+    try:
+        brief_data = json.loads(brief or "{}")
+        policy = (
+            {
+                key: brief_data[key]
+                for key in ("changeLevel", "previousProposal", "recipe")
+                if key in brief_data
+            }
+            if isinstance(brief_data, dict)
+            else {}
+        )
+    except (ValueError, TypeError):
+        policy = {}
     tools = ToolLoop(
         settings,
         ranked=ranked,
@@ -194,6 +213,8 @@ def _propose(
         reader=reader,
         on_event=on_event,
         selected=creatives is not None,
+        policy=policy,
+        research_records=research_records,
     )
     if model is None:
         raw = run_tool_loop(settings, tools, brief=brief)
@@ -210,6 +231,7 @@ def _propose(
         )
     try:
         output = _coerce_output(raw)
+        tools.validate_output(output)
     except (ValidationError, TypeError, ValueError) as error:
         raise ValueError(f"Invalid model output; no files were written: {error}") from error
     if model is not None:

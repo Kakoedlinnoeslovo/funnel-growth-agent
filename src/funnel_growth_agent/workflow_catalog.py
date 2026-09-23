@@ -100,7 +100,7 @@ def report_snapshot(settings: Settings) -> dict[str, Any]:
         raise ValueError("No weekly report available. You can still upload creatives to generate a page.")
     report = {
         key: weekly.get(key)
-        for key in ("generated_at", "period", "run_date", "title", "ph_flows", "_path")
+        for key in ("generated_at", "period", "run_date", "title", "ph_flows", "creative_audience", "_path")
     }
     report["creatives"] = [
         {key: value for key, value in row.items() if not key.endswith("b64")}

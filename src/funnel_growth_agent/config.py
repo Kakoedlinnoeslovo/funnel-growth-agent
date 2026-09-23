@@ -37,7 +37,7 @@ class Settings:
     glam_api_key: str | None = None
     browse_bin: Path | None = None
     tile_variants: int = 3
-    analysis_schema_version: int = 4
+    analysis_schema_version: int = 5
     prod_landing_base: str | None = None
     now: str | None = None
     vercel_bin: str = "vercel"
@@ -64,7 +64,8 @@ class Settings:
 
     @property
     def youtube_catalog_path(self) -> Path:
-        return PACKAGE_DIR / "youtube_catalog.json"
+        saved = self.data_dir / "youtube_catalog.json"
+        return saved if saved.is_file() else PACKAGE_DIR / "youtube_catalog.json"
 
     @property
     def reports_dir(self) -> Path:

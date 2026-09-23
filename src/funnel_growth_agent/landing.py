@@ -24,7 +24,7 @@ TEXT_KEYS = {
     "pageTitle",
 }
 
-HERO_COMPONENTS = {"kittl-hero", "hero-carousel", "quiz-hero"}
+HERO_COMPONENTS = {"kittl-hero", "hero-carousel", "quiz-hero", "growth-block"}
 
 
 def landing_image_targets(
@@ -34,7 +34,10 @@ def landing_image_targets(
     groups = {}
     for section, sid in zip(sections, resolve_section_ids(sections)):
         component = section.get("component")
-        if component == "showcase":
+        if component == "growth-block":
+            images = section.get("images") or []
+            groups[sid] = (section.get("headline"), [(images, i) for i in range(len(images))])
+        elif component == "showcase":
             for group in section.get("groups") or []:
                 images = group.get("images") or []
                 groups[str(group["label"])] = (
@@ -77,6 +80,9 @@ def _strip_section(section: dict[str, Any], section_id: str) -> dict[str, Any]:
     out: dict[str, Any] = {"id": section_id, "component": section.get("component")}
     out["canReorder"] = section.get("component") in MOVABLE_COMPONENTS
     out["canOmit"] = section.get("component") in OMITTABLE_COMPONENTS
+    if section.get("component") == "growth-block":
+        out.update({k: section.get(k) for k in ("kind", "headline", "body", "ctaLabel", "layout", "items", "images")})
+        out["canReorder"] = section.get("kind") not in {"hero", "cta"}
     if section.get("component") == "hero-carousel":
         slides = section.get("slides") or []
         out["slides"] = slides
@@ -122,6 +128,8 @@ def get_current_landing(settings: Settings) -> dict[str, Any]:
         "version": settings.base_version,
         "hash": landing_hash(settings.landing_path),
         "pageTitle": props.get("pageTitle"),
+        "growthDesign": props.get("growthDesign"),
+        "rawSections": raw_sections,
         "header": props.get("header"),
         "footer": props.get("footer"),
         "mobile": props.get("mobile"),

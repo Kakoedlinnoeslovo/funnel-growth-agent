@@ -208,7 +208,7 @@ def test_corrupt_and_mislabeled_media_are_not_registered(settings, media_file):
     assert not list((settings.data_dir / "uploads").iterdir())
 
 
-def test_frame_reused_for_analysis_and_cta_text_distinguished(settings, media_file):
+def test_original_video_preferred_and_visual_cta_text_distinguished(settings, media_file):
     from funnel_growth_agent.gemini import analyze_creative
     from funnel_growth_agent.models import CreativeAnalysis
     from funnel_growth_agent.workflow_catalog import ranked_selection
@@ -219,9 +219,15 @@ def test_frame_reused_for_analysis_and_cta_text_distinguished(settings, media_fi
 
     def analyze(creative, asset):
         calls.append(asset)
-        assert asset == Path(row["imagePath"])
+        assert asset == Path(row["videoPath"])
         return CreativeAnalysis(
-            visualHook="Opening frame",
+            visualHook="Whole-video interpretation",
+            videoEvidence={
+                "concept": "Editable vectors",
+                "narrative": "Full sequence",
+                "duration": 2,
+                "method": "video_audio",
+            },
             primaryPromise="Editable vectors",
             audienceIntent="Designers",
             ctaIntent="Try vector editing",
@@ -293,6 +299,15 @@ def test_upload_http_route_origin_limits_catalog_and_assets(settings, media_file
         assert row["name"] == "my creative.png" and "imagePath" not in row
         code, image = request("GET", row["imageUrl"])
         assert code == 200 and image.startswith(b"\xff\xd8")
+        for interval, expected in [
+            ("bytes=1-8", image[1:9]),
+            ("bytes=-5", image[-5:]),
+            ("bytes=9-", image[9:]),
+        ]:
+            code, part = request("GET", row["imageUrl"], headers={"Range": interval})
+            assert code == 206 and part == expected
+        code, _ = request("GET", row["imageUrl"], headers={"Range": "bytes=99999999-"})
+        assert code == 416
         code, body = request("GET", "/api/catalog")
         assert row["id"] in {item["id"] for item in json.loads(body)["creatives"]}
         code, _ = request(

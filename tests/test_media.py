@@ -87,9 +87,11 @@ def test_clip_stems_are_deterministic_content_keys() -> None:
 def test_tile_stem_changes_with_prompt_model_and_reference_bytes(settings) -> None:
     spec = build_tile_spec(_tile(), settings, "v7")
     assert spec.stem.startswith("gen-") and len(spec.stem) == 16
-    assert spec.model_name == "gemini-3-pro-image"
+    assert spec.model_name == "gemini-3.1-flash-image"
     assert "strawberry" in spec.prompt and "Logos and icons" in spec.prompt
     assert build_tile_spec(_tile(), settings, "v7").stem == spec.stem
+    pro = build_tile_spec(_tile(model="nano_banana_pro"), settings, "v7")
+    assert pro.model_name == "gemini-3-pro-image" and pro.stem != spec.stem
     assert build_tile_spec(_tile(background="a red field"), settings, "v7").stem != spec.stem
     assert tile_stem("other-model", spec.prompt, spec.references) != spec.stem
     ref = settings.pricing_lab_dir / "funnels" / "v7" / "assets" / "showcase" / "vector-2.webp"
@@ -241,7 +243,7 @@ def test_generate_tile_makes_candidates_judges_and_caches(settings) -> None:
     result = generate_tile(spec, settings, tools, emit, variants=3)
     assert len(result.candidates) == 3 and not result.cached
     call = images.calls[0]
-    assert call["model"] == "gemini-3-pro-image"
+    assert call["model"] == "gemini-3.1-flash-image"
     assert len(set(call["seeds"])) == 3
     assert call["prompts"][0] == spec.prompt and call["prompts"][1] != spec.prompt
     assert call["references"] == ["tile:Vectors:1"]
@@ -255,7 +257,7 @@ def test_generate_tile_makes_candidates_judges_and_caches(settings) -> None:
     assert (cache / f"{spec.stem}.prompt.txt").read_text() == spec.prompt
     refs = json.loads((cache / f"{spec.stem}.refs.json").read_text())
     assert refs[0]["ref"] == "tile:Vectors:1"
-    assert any("3 candidates via gemini-3-pro-image [1 refs]" in line for line in seen)
+    assert any("3 candidates via gemini-3.1-flash-image [1 refs]" in line for line in seen)
     assert any("judge picked #1" in line for line in seen)
     again = generate_tile(spec, settings, tools, emit, variants=3)
     assert again.cached and len(images.calls) == 1 and len(judge.calls) == 1
@@ -394,11 +396,41 @@ def test_produce_media_stages_clip_tiles_and_thumbs(settings, tmp_path: Path) ->
     assert len(produced.tiles) == 2 and produced.cached_files == 0
 
 
-def test_produce_media_rejects_clip_past_source_end(settings, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("start", "duration", "source_duration"),
+    [
+        (2, 28, "30.0"),
+        (0, 30, "30.0"),
+        (2, 27.95, "30.0"),
+        (2, 28, "29.974"),
+        (2, 28, "29.9"),
+    ],
+)
+def test_produce_media_accepts_clip_at_source_end(
+    settings, tmp_path: Path, start: float, duration: float, source_duration: str
+) -> None:
+    runner = FakeRunner(duration=source_duration)
+    plan = MediaPlan(heroVideo=_clip(start=start, duration=duration))
+    variant = tmp_path / "v7_a1"
+    produced = produce_media(
+        plan, variant, settings, fake_media_tools(runner=runner), lambda *_: None
+    )
+    assert len(produced.files.hero_video) == 6
+    assert all((variant / rel).is_file() for rel in produced.files.hero_video)
+    ffmpeg = runner.calls_for("ffmpeg")
+    assert len(ffmpeg) == 6
+    assert ffmpeg[0][ffmpeg[0].index("-ss") + 1] == f"{start:g}"
+    assert ffmpeg[0][ffmpeg[0].index("-t") + 1] == f"{duration:g}"
+
+
+@pytest.mark.parametrize("source_duration", ["10.0", "29.89", "29.899999"])
+def test_produce_media_rejects_clip_past_source_end(
+    settings, tmp_path: Path, source_duration: str
+) -> None:
     variant = tmp_path / "v7_a1"
     variant.mkdir()
-    runner = FakeRunner(duration="10.0")
-    plan = MediaPlan(heroVideo=_clip())
+    runner = FakeRunner(duration=source_duration)
+    plan = MediaPlan(heroVideo=_clip(start=2, duration=28))
     with pytest.raises(ApplyError, match="exceeds source length"):
         produce_media(plan, variant, settings, fake_media_tools(runner=runner), lambda *_: None)
     assert not runner.calls_for("ffmpeg")
@@ -442,4 +474,58 @@ def test_failed_tool_is_reported_with_its_stderr(settings, tmp_path: Path) -> No
             settings,
             fake_media_tools(runner=runner),
             lambda *_: None,
+        )
+
+
+def test_asset_role_composition_and_message_change_cache_key(settings):
+    original = build_tile_spec(_tile(), settings, "v7")
+    for extra in [
+        dict(role="hero"),
+        dict(composition="Keep the subject to the right, with open space for a headline."),
+        dict(intendedMessage="Show a consistent icon family"),
+        dict(aspectRatio="4:3"),
+        dict(artDirection="Warm paper and lime accents"),
+    ]:
+        assert build_tile_spec(_tile(**extra), settings, "v7").stem != original.stem
+
+
+def test_gemini_nano_banana_2_accepts_references_and_requested_aspect(
+    settings, tmp_path, monkeypatch
+):
+    from types import SimpleNamespace as NS
+
+    from google import genai
+
+    from funnel_growth_agent.media import GeminiImageClient, HttpGlamClient
+
+    plan = _tile(model="nano_banana_2", aspectRatio="4:3")
+    spec = build_tile_spec(plan, settings, "v7")
+    calls = []
+
+    async def generate(**kwargs):
+        calls.append(kwargs)
+        return NS(candidates=[NS(content=NS(parts=[NS(inline_data=NS(data=b"generated image"))]))])
+
+    monkeypatch.setattr(
+        genai, "Client", lambda **_: NS(aio=NS(models=NS(generate_content=generate)))
+    )
+    client = GeminiImageClient("test-key")
+    dest = tmp_path / "candidate.png"
+    assert client.generate_candidates(
+        model=spec.model_name,
+        prompts=[spec.prompt],
+        references=spec.references,
+        seeds=[1],
+        dests=[dest],
+        aspect_ratio=plan.aspect_ratio,
+    ) == [dest]
+    assert calls[0]["config"].image_config.aspect_ratio == "4:3"
+    assert len(calls[0]["contents"]) == len(spec.references) + 1
+    with pytest.raises(RuntimeError, match="no reference images"):
+        HttpGlamClient("test").generate_candidates(
+            model=spec.model_name,
+            prompts=[spec.prompt],
+            references=spec.references,
+            seeds=[1],
+            dests=[dest],
         )

@@ -1,84 +1,1033 @@
 {
+  "schemaVersion": 1,
   "channel": "https://www.youtube.com/@Recraftai",
-  "note": "Recraft's own product videos. Only these ids may be used as a hero clip source; apply downloads with yt-dlp and trims with ffmpeg.",
+  "channelId": "UCzA1s-xikIANwlEXrOwk19w",
+  "indexedAt": "2026-09-22T22:47:43.302367+00:00",
+  "source": "yt-dlp flat channel playlists (all pages)",
+  "sourceTabs": {
+    "videos": 63,
+    "streams": 1,
+    "shorts": 20
+  },
+  "counts": {
+    "video": 63,
+    "stream": 1,
+    "short": 20
+  },
+  "note": "Saved public channel metadata, not transcripts or a visual review. Topics marked title are inferred from titles. Missing durations are unknown. Video files download on demand and are cached locally.",
   "videos": [
     {
-      "videoId": "z0r74lakHOM",
-      "title": "Recraft Vectorize: Turn Images into Editable Vectors",
-      "durationSeconds": 89,
-      "topics": ["vectorize", "image to vector", "editable svg", "path editing"]
+      "videoId": "wcYV_zoTCqE",
+      "title": "How to Make AI Keep the Same Style Every Time | Recraft V4 Styles",
+      "url": "https://www.youtube.com/watch?v=wcYV_zoTCqE",
+      "kind": "video",
+      "durationSeconds": 123,
+      "viewCount": 570,
+      "topics": [
+        "styles",
+        "consistency"
+      ],
+      "topicsSource": "curated"
     },
     {
-      "videoId": "U8N6A0aiNN0",
-      "title": "Generate & Edit Vectors in Recraft Studio | New Vector Editing Workflow",
-      "durationSeconds": 182,
-      "topics": ["vector generation", "vector editing", "studio"]
+      "videoId": "hjIJ2wwy2iA",
+      "title": "What’s New in Recraft Studio | August 2026",
+      "url": "https://www.youtube.com/watch?v=hjIJ2wwy2iA",
+      "kind": "video",
+      "durationSeconds": 183,
+      "viewCount": 892,
+      "topics": [
+        "studio"
+      ],
+      "topicsSource": "title"
     },
     {
       "videoId": "1nevzOnWTGE",
       "title": "Recraft V4 Styles",
+      "url": "https://www.youtube.com/watch?v=1nevzOnWTGE",
+      "kind": "video",
       "durationSeconds": 44,
-      "topics": ["styles", "consistency", "brand"]
-    },
-    {
-      "videoId": "wcYV_zoTCqE",
-      "title": "How to Make AI Keep the Same Style Every Time | Recraft V4 Styles",
-      "durationSeconds": 123,
-      "topics": ["styles", "consistency"]
+      "viewCount": 2100,
+      "topics": [
+        "styles",
+        "consistency",
+        "brand"
+      ],
+      "topicsSource": "curated"
     },
     {
       "videoId": "1X00fOhz11o",
       "title": "Introducing V4 Styles",
+      "url": "https://www.youtube.com/watch?v=1X00fOhz11o",
+      "kind": "video",
       "durationSeconds": 132,
-      "topics": ["styles", "launch"]
-    },
-    {
-      "videoId": "VHnfjE6a6nE",
-      "title": "Recraft Editing Templates: The Fastest AI Workflow",
-      "durationSeconds": 88,
-      "topics": ["templates", "editing", "speed"]
-    },
-    {
-      "videoId": "X4i1pbfjZF4",
-      "title": "Mockups in Recraft Studio: Step-by-Step",
-      "durationSeconds": 134,
-      "topics": ["mockups", "product shots"]
-    },
-    {
-      "videoId": "UUYo1rReRQU",
-      "title": "The Easiest Way to Generate AI Videos | Recraft Studio",
-      "durationSeconds": 162,
-      "topics": ["video generation"]
-    },
-    {
-      "videoId": "oiTxyBVbTis",
-      "title": "How to Use an AI Logo Generator: Create Stunning Logos with Recraft V4",
-      "durationSeconds": 194,
-      "topics": ["logo", "branding"]
-    },
-    {
-      "videoId": "gwUbE9D6V-8",
-      "title": "Recraft V4.1",
-      "durationSeconds": 31,
-      "topics": ["model launch", "image generation"]
-    },
-    {
-      "videoId": "ns30Qj4WTwk",
-      "title": "Introducing Recraft V4",
-      "durationSeconds": 124,
-      "topics": ["model launch", "image generation"]
+      "viewCount": 1000,
+      "topics": [
+        "styles",
+        "launch"
+      ],
+      "topicsSource": "curated"
     },
     {
       "videoId": "Pb71_1pIrec",
       "title": "How to Use Recraft Studio in 2026 | Full Interface Walkthrough",
+      "url": "https://www.youtube.com/watch?v=Pb71_1pIrec",
+      "kind": "video",
       "durationSeconds": 392,
-      "topics": ["studio", "walkthrough", "canvas"]
+      "viewCount": 1800,
+      "topics": [
+        "studio",
+        "walkthrough",
+        "canvas"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "9-KW4MQ2rdY",
+      "title": "What’s New in Recraft Studio | July 2026",
+      "url": "https://www.youtube.com/watch?v=9-KW4MQ2rdY",
+      "kind": "video",
+      "durationSeconds": 144,
+      "viewCount": 1000,
+      "topics": [
+        "studio"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "UUYo1rReRQU",
+      "title": "The Easiest Way to Generate AI Videos | Recraft Studio",
+      "url": "https://www.youtube.com/watch?v=UUYo1rReRQU",
+      "kind": "video",
+      "durationSeconds": 162,
+      "viewCount": 744,
+      "topics": [
+        "video generation"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "U8N6A0aiNN0",
+      "title": "Generate & Edit Vectors in Recraft Studio | New Vector Editing Workflow",
+      "url": "https://www.youtube.com/watch?v=U8N6A0aiNN0",
+      "kind": "video",
+      "durationSeconds": 182,
+      "viewCount": 1000,
+      "topics": [
+        "vector generation",
+        "vector editing",
+        "studio"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "X4i1pbfjZF4",
+      "title": "Mockups in Recraft Studio: Step-by-Step",
+      "url": "https://www.youtube.com/watch?v=X4i1pbfjZF4",
+      "kind": "video",
+      "durationSeconds": 134,
+      "viewCount": 737,
+      "topics": [
+        "mockups",
+        "product shots"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "BqpNAgFyytM",
+      "title": "How Recraft V4.1 Compares to GPT Image 2",
+      "url": "https://www.youtube.com/watch?v=BqpNAgFyytM",
+      "kind": "video",
+      "durationSeconds": 248,
+      "viewCount": 813,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "BznvaYTnao0",
+      "title": "Recraft V4.1 vs Nano Banana 2: Same Prompt, Different Taste",
+      "url": "https://www.youtube.com/watch?v=BznvaYTnao0",
+      "kind": "video",
+      "durationSeconds": 256,
+      "viewCount": 1600,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "CZGAvSp7TAY",
+      "title": "Recraft V4.1 and Midjourney Compared",
+      "url": "https://www.youtube.com/watch?v=CZGAvSp7TAY",
+      "kind": "video",
+      "durationSeconds": 286,
+      "viewCount": 1200,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "AOPKK0LlI_Q",
+      "title": "Recraft Office Hours: V4.1 with Recraft's Art Director",
+      "url": "https://www.youtube.com/watch?v=AOPKK0LlI_Q",
+      "kind": "video",
+      "durationSeconds": 3557,
+      "viewCount": 870,
+      "topics": [],
+      "topicsSource": "title"
     },
     {
       "videoId": "yDWEin6ifU4",
       "title": "How Collections Work in Recraft Studio",
+      "url": "https://www.youtube.com/watch?v=yDWEin6ifU4",
+      "kind": "video",
       "durationSeconds": 109,
-      "topics": ["collections", "organisation"]
+      "viewCount": 361,
+      "topics": [
+        "collections",
+        "organisation"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "VHnfjE6a6nE",
+      "title": "Recraft Editing Templates: The Fastest AI Workflow",
+      "url": "https://www.youtube.com/watch?v=VHnfjE6a6nE",
+      "kind": "video",
+      "durationSeconds": 88,
+      "viewCount": 386,
+      "topics": [
+        "templates",
+        "editing",
+        "speed"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "gwUbE9D6V-8",
+      "title": "Recraft V4.1",
+      "url": "https://www.youtube.com/watch?v=gwUbE9D6V-8",
+      "kind": "video",
+      "durationSeconds": 31,
+      "viewCount": 1900,
+      "topics": [
+        "model launch",
+        "image generation"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "18D83qlm1is",
+      "title": "Recraft V4.1 explained",
+      "url": "https://www.youtube.com/watch?v=18D83qlm1is",
+      "kind": "video",
+      "durationSeconds": 184,
+      "viewCount": 4600,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "z0r74lakHOM",
+      "title": "Recraft Vectorize: Turn Images into Editable Vectors",
+      "url": "https://www.youtube.com/watch?v=z0r74lakHOM",
+      "kind": "video",
+      "durationSeconds": 89,
+      "viewCount": 1000,
+      "topics": [
+        "vectorize",
+        "image to vector",
+        "editable svg",
+        "path editing"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "lcjjryTPqE4",
+      "title": "Session 4: about marketing assets",
+      "url": "https://www.youtube.com/watch?v=lcjjryTPqE4",
+      "kind": "video",
+      "durationSeconds": 3383,
+      "viewCount": 390,
+      "topics": [
+        "workshop"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "wjxco8rLekA",
+      "title": "Recraft is Now Inside Figma, Framer & Chrome | AI Image Generation Plugin 2026",
+      "url": "https://www.youtube.com/watch?v=wjxco8rLekA",
+      "kind": "video",
+      "durationSeconds": 44,
+      "viewCount": 532,
+      "topics": [
+        "figma"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "sXajoSGauhY",
+      "title": "Session 3: Exploration mode and Video generation overview",
+      "url": "https://www.youtube.com/watch?v=sXajoSGauhY",
+      "kind": "video",
+      "durationSeconds": 3175,
+      "viewCount": 605,
+      "topics": [
+        "video generation",
+        "workshop"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "oiTxyBVbTis",
+      "title": "How to Use an AI Logo Generator: Create Stunning Logos with Recraft V4",
+      "url": "https://www.youtube.com/watch?v=oiTxyBVbTis",
+      "kind": "video",
+      "durationSeconds": 194,
+      "viewCount": 3900,
+      "topics": [
+        "logo",
+        "branding"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "GfHeeeoyOO8",
+      "title": "Recraft V4 explained: how to use V4 image model",
+      "url": "https://www.youtube.com/watch?v=GfHeeeoyOO8",
+      "kind": "video",
+      "durationSeconds": 316,
+      "viewCount": 4600,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "nBd9JJuAT1Y",
+      "title": "Session 2: overview of Recraft V4 with founder Anna Veronika Dorogush",
+      "url": "https://www.youtube.com/watch?v=nBd9JJuAT1Y",
+      "kind": "video",
+      "durationSeconds": 3425,
+      "viewCount": 1100,
+      "topics": [
+        "workshop"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "ns30Qj4WTwk",
+      "title": "Introducing Recraft V4",
+      "url": "https://www.youtube.com/watch?v=ns30Qj4WTwk",
+      "kind": "video",
+      "durationSeconds": 124,
+      "viewCount": 10000,
+      "topics": [
+        "model launch",
+        "image generation"
+      ],
+      "topicsSource": "curated"
+    },
+    {
+      "videoId": "HObd1J-Npm4",
+      "title": "Session 1: Getting Started with Recraft Studio",
+      "url": "https://www.youtube.com/watch?v=HObd1J-Npm4",
+      "kind": "video",
+      "durationSeconds": 3213,
+      "viewCount": 1300,
+      "topics": [
+        "studio",
+        "workshop"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "4JP_JQwl0_A",
+      "title": "Recraft Studio: New Interface Overview",
+      "url": "https://www.youtube.com/watch?v=4JP_JQwl0_A",
+      "kind": "video",
+      "durationSeconds": 203,
+      "viewCount": 1200,
+      "topics": [
+        "studio"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "5BBlFmHCDy0",
+      "title": "How to Build Custom Styles and Edit with NanoBanana Pro",
+      "url": "https://www.youtube.com/watch?v=5BBlFmHCDy0",
+      "kind": "video",
+      "durationSeconds": 119,
+      "viewCount": 811,
+      "topics": [
+        "styles",
+        "editing"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "5EcTeB2c74Y",
+      "title": "Recraft 3D tutorial: generate consistent 3D Styles, Characters & Icons step-by-step",
+      "url": "https://www.youtube.com/watch?v=5EcTeB2c74Y",
+      "kind": "video",
+      "durationSeconds": 135,
+      "viewCount": 1700,
+      "topics": [
+        "icons",
+        "styles",
+        "consistency",
+        "3d",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "Xx7uzs9My0U",
+      "title": "How to use Nano Banana Pro in Recraft: Realistic photos, AI edits & Posters Tutorial",
+      "url": "https://www.youtube.com/watch?v=Xx7uzs9My0U",
+      "kind": "video",
+      "durationSeconds": 141,
+      "viewCount": 1900,
+      "topics": [
+        "photography",
+        "editing",
+        "posters",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "P7paEZBLbvM",
+      "title": "How to Use an AI Logo Generator: Create Stunning Logos with Recraft",
+      "url": "https://www.youtube.com/watch?v=P7paEZBLbvM",
+      "kind": "video",
+      "durationSeconds": 91,
+      "viewCount": 2800,
+      "topics": [
+        "logos"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "Qqhje2E5PuY",
+      "title": "From Prompt to Packaging: AI product mockup design in Recraft",
+      "url": "https://www.youtube.com/watch?v=Qqhje2E5PuY",
+      "kind": "video",
+      "durationSeconds": 787,
+      "viewCount": 2000,
+      "topics": [
+        "mockups"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "QBATCGFR4YI",
+      "title": "Custom AI Mockups with Recraft",
+      "url": "https://www.youtube.com/watch?v=QBATCGFR4YI",
+      "kind": "video",
+      "durationSeconds": 778,
+      "viewCount": 4800,
+      "topics": [
+        "mockups"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "mDRhasRH8As",
+      "title": "How to Expand Images with AI Outpainting — Recraft Tutorial",
+      "url": "https://www.youtube.com/watch?v=mDRhasRH8As",
+      "kind": "video",
+      "durationSeconds": 61,
+      "viewCount": 827,
+      "topics": [
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "2gaPU65hg5g",
+      "title": "How to Use Recraft for beauty campaign design | Logos, Styles & Mockups",
+      "url": "https://www.youtube.com/watch?v=2gaPU65hg5g",
+      "kind": "video",
+      "durationSeconds": 259,
+      "viewCount": 1300,
+      "topics": [
+        "logos",
+        "styles",
+        "mockups"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "uLD2LOBxcCY",
+      "title": "Custom beauty mockups in minutes with AI | No photoshop needed (Recraft Tutorial)",
+      "url": "https://www.youtube.com/watch?v=uLD2LOBxcCY",
+      "kind": "video",
+      "durationSeconds": 105,
+      "viewCount": 731,
+      "topics": [
+        "mockups",
+        "photography",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "7-pjrkRKOLU",
+      "title": "Recraft Chat Mode: Design with AI by simply talking | No prompts needed",
+      "url": "https://www.youtube.com/watch?v=7-pjrkRKOLU",
+      "kind": "video",
+      "durationSeconds": 43,
+      "viewCount": 538,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "VuFlRHhyXqg",
+      "title": "Create Merch Mockups in minutes with AI | Step by Step Recraft tutorial (No Photoshop needed)",
+      "url": "https://www.youtube.com/watch?v=VuFlRHhyXqg",
+      "kind": "video",
+      "durationSeconds": 127,
+      "viewCount": 1500,
+      "topics": [
+        "mockups",
+        "photography",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "aKL5veGw7dQ",
+      "title": "Create stunning photorealistic portraits with AI | Recraft Tutorial",
+      "url": "https://www.youtube.com/watch?v=aKL5veGw7dQ",
+      "kind": "video",
+      "durationSeconds": 263,
+      "viewCount": 1600,
+      "topics": [
+        "photography",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "sMlrI7B636c",
+      "title": "Quick tutorial: brand-ready AI photoshoot with Nano Banana & Recraft (from 1 Photo!)",
+      "url": "https://www.youtube.com/watch?v=sMlrI7B636c",
+      "kind": "video",
+      "durationSeconds": 105,
+      "viewCount": 3400,
+      "topics": [
+        "branding",
+        "photography",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "3YMTwhs1Tdc",
+      "title": "How to use external models in Recraft: Nano Banana, GPT, FLUX & More",
+      "url": "https://www.youtube.com/watch?v=3YMTwhs1Tdc",
+      "kind": "video",
+      "durationSeconds": 189,
+      "viewCount": 1000,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "iRIgRmPbazk",
+      "title": "How to Vectorize Any Image in Recraft (Step by Step Tutorial)",
+      "url": "https://www.youtube.com/watch?v=iRIgRmPbazk",
+      "kind": "video",
+      "durationSeconds": 110,
+      "viewCount": 3500,
+      "topics": [
+        "vectors",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "bTGtdg7J97M",
+      "title": "How to fix anatomical issues with AI | Creative Upscaler in Recraft",
+      "url": "https://www.youtube.com/watch?v=bTGtdg7J97M",
+      "kind": "video",
+      "durationSeconds": 81,
+      "viewCount": 661,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "pdaJyySiDaY",
+      "title": "How to create custom styles in Recraft — advanced AI style controls for designers",
+      "url": "https://www.youtube.com/watch?v=pdaJyySiDaY",
+      "kind": "video",
+      "durationSeconds": 129,
+      "viewCount": 3900,
+      "topics": [
+        "styles"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "oze-qSme_A8",
+      "title": "How to generate AI Images in your brand colors",
+      "url": "https://www.youtube.com/watch?v=oze-qSme_A8",
+      "kind": "video",
+      "durationSeconds": 97,
+      "viewCount": 1100,
+      "topics": [
+        "branding"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "Xo6r1HB4r_0",
+      "title": "New Tools for Brand Style Consistency and Control",
+      "url": "https://www.youtube.com/watch?v=Xo6r1HB4r_0",
+      "kind": "video",
+      "durationSeconds": 52,
+      "viewCount": 2800,
+      "topics": [
+        "branding",
+        "styles"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "KSiBXhgBWh8",
+      "title": "How to Create a Custom Style in Recraft | AI Image Generator with Full Control",
+      "url": "https://www.youtube.com/watch?v=KSiBXhgBWh8",
+      "kind": "video",
+      "durationSeconds": 68,
+      "viewCount": 3300,
+      "topics": [
+        "styles"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "8LqNauu1yQs",
+      "title": "How to Use an AI Logo Generator: Create Stunning Logos with Recraft",
+      "url": "https://www.youtube.com/watch?v=8LqNauu1yQs",
+      "kind": "video",
+      "durationSeconds": 66,
+      "viewCount": 4800,
+      "topics": [
+        "logos"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "I5u1slpeqIs",
+      "title": "How to Expand Images with AI Outpainting — Recraft Tutorial",
+      "url": "https://www.youtube.com/watch?v=I5u1slpeqIs",
+      "kind": "video",
+      "durationSeconds": 71,
+      "viewCount": 2600,
+      "topics": [
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "IL0bfg0GhCg",
+      "title": "AI Inpaint Tutorial – Best Tool to Edit Images Fast",
+      "url": "https://www.youtube.com/watch?v=IL0bfg0GhCg",
+      "kind": "video",
+      "durationSeconds": 44,
+      "viewCount": 5600,
+      "topics": [
+        "editing",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "ZexyDh2PEGs",
+      "title": "Al-Powered Mockup Generator by Recraft",
+      "url": "https://www.youtube.com/watch?v=ZexyDh2PEGs",
+      "kind": "video",
+      "durationSeconds": 49,
+      "viewCount": 9000,
+      "topics": [
+        "mockups"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "KCQhyHpiwXA",
+      "title": "AI-generated mockups in Recraft",
+      "url": "https://www.youtube.com/watch?v=KCQhyHpiwXA",
+      "kind": "video",
+      "durationSeconds": 14,
+      "viewCount": 33000,
+      "topics": [
+        "mockups"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "4lx2_7mz0Tk",
+      "title": "How to upscale an image with Recraft",
+      "url": "https://www.youtube.com/watch?v=4lx2_7mz0Tk",
+      "kind": "video",
+      "durationSeconds": 84,
+      "viewCount": 6100,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "hg95IkGjKOo",
+      "title": "How to use Discord AI image generator bot",
+      "url": "https://www.youtube.com/watch?v=hg95IkGjKOo",
+      "kind": "video",
+      "durationSeconds": 105,
+      "viewCount": 5100,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "ee9zsP2KpsI",
+      "title": "How to create your own style for AI image generation",
+      "url": "https://www.youtube.com/watch?v=ee9zsP2KpsI",
+      "kind": "video",
+      "durationSeconds": 118,
+      "viewCount": 6900,
+      "topics": [
+        "styles"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "6Y0P_4H9mIo",
+      "title": "How to remove a background from any image in one click",
+      "url": "https://www.youtube.com/watch?v=6Y0P_4H9mIo",
+      "kind": "video",
+      "durationSeconds": 86,
+      "viewCount": 4900,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "A_9RVQUSDhk",
+      "title": "How to create a set of images with the same look + feel",
+      "url": "https://www.youtube.com/watch?v=A_9RVQUSDhk",
+      "kind": "video",
+      "durationSeconds": 187,
+      "viewCount": 14000,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "9SF-AD5_GQI",
+      "title": "The Valentizer in action",
+      "url": "https://www.youtube.com/watch?v=9SF-AD5_GQI",
+      "kind": "video",
+      "durationSeconds": 18,
+      "viewCount": 1000,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "bNDUkxgF6QU",
+      "title": "How to generate sets in Recraft?",
+      "url": "https://www.youtube.com/watch?v=bNDUkxgF6QU",
+      "kind": "video",
+      "durationSeconds": 109,
+      "viewCount": 6600,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "R04moq83jhA",
+      "title": "Recraft — How to add something to an image",
+      "url": "https://www.youtube.com/watch?v=R04moq83jhA",
+      "kind": "video",
+      "durationSeconds": 15,
+      "viewCount": 7100,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "1Wxc5T62bok",
+      "title": "Recraft — How to fix anatomy issues",
+      "url": "https://www.youtube.com/watch?v=1Wxc5T62bok",
+      "kind": "video",
+      "durationSeconds": 10,
+      "viewCount": 4100,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "MasQw591FXY",
+      "title": "Recraft — Background Selection",
+      "url": "https://www.youtube.com/watch?v=MasQw591FXY",
+      "kind": "video",
+      "durationSeconds": 13,
+      "viewCount": 5400,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "mgIodv6NKqY",
+      "title": "Recraft — How to use remove tool",
+      "url": "https://www.youtube.com/watch?v=mgIodv6NKqY",
+      "kind": "video",
+      "durationSeconds": 8,
+      "viewCount": 4000,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "bspnBUuPS3s",
+      "title": "Recraft Live Stream Midnight Code Cup",
+      "url": "https://www.youtube.com/watch?v=bspnBUuPS3s",
+      "kind": "stream",
+      "durationSeconds": 16194,
+      "viewCount": 258,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "vAtIrl6fjiA",
+      "title": "Turn any logo into a realistic 3D object",
+      "url": "https://www.youtube.com/watch?v=vAtIrl6fjiA",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 2300,
+      "topics": [
+        "logos",
+        "3d"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "K_emiJzmRfs",
+      "title": "Turn any text, logo, or shape into any material using AI in Recraft 🎨🤖",
+      "url": "https://www.youtube.com/watch?v=K_emiJzmRfs",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 1900,
+      "topics": [
+        "logos",
+        "typography"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "UTg9z8fhdGk",
+      "title": "How to create 3D characters using a custom style in Recraft",
+      "url": "https://www.youtube.com/watch?v=UTg9z8fhdGk",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 2100,
+      "topics": [
+        "styles",
+        "3d"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "RANKLgHbcxw",
+      "title": "NanoBanana Pro is now available in Recraft 🍌✨",
+      "url": "https://www.youtube.com/watch?v=RANKLgHbcxw",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 1300,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "huCpHGFeKxg",
+      "title": "Turn Any Product Photo into a Real Ad | AI Editing Made Simple",
+      "url": "https://www.youtube.com/watch?v=huCpHGFeKxg",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 1400,
+      "topics": [
+        "photography",
+        "editing"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "Ma3ZNDkqLr0",
+      "title": "Full Control Over Your AI Visuals | Style + Editing Tutorial",
+      "url": "https://www.youtube.com/watch?v=Ma3ZNDkqLr0",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 1500,
+      "topics": [
+        "styles",
+        "editing",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "nTR63CMG-WY",
+      "title": "The Easiest Way to Make Realistic Mockups with AI (Recraft Tutorial)",
+      "url": "https://www.youtube.com/watch?v=nTR63CMG-WY",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 2300,
+      "topics": [
+        "mockups",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "I_qPiIwISv4",
+      "title": "How to Write Perfect Prompts in Recraft (5 Simple Tricks for Designers)",
+      "url": "https://www.youtube.com/watch?v=I_qPiIwISv4",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 1400,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "QL1sjp1YG3k",
+      "title": "How to Turn Any Image (photo, artwork, movie scene) Into Your Own Custom AI Style | Recraft Tutorial",
+      "url": "https://www.youtube.com/watch?v=QL1sjp1YG3k",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 1500,
+      "topics": [
+        "styles",
+        "photography",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "pXMLaO_i8Lw",
+      "title": "How to Keep a Consistent Look in All Your AI Images | Recraft Feed Library Explained",
+      "url": "https://www.youtube.com/watch?v=pXMLaO_i8Lw",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 1900,
+      "topics": [
+        "consistency"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "k-rzbQvduzo",
+      "title": "Convert Any Image to Vector in Seconds with Recraft | Vectorizer Tutorial",
+      "url": "https://www.youtube.com/watch?v=k-rzbQvduzo",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 27000,
+      "topics": [
+        "vectors",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "qwTbzNF_BhM",
+      "title": "How to Generate Product Mockups with Recraft AI",
+      "url": "https://www.youtube.com/watch?v=qwTbzNF_BhM",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 2400,
+      "topics": [
+        "mockups"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "eXCbLonAICg",
+      "title": "How to Seamlessly Expand Any Image With AI (Recraft Outpainting Feature)",
+      "url": "https://www.youtube.com/watch?v=eXCbLonAICg",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 3400,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "2kVsMGlt4N0",
+      "title": "How to Generate Realistic Images with Your Real Product – Recraft + Nano Banana AI Workflow",
+      "url": "https://www.youtube.com/watch?v=2kVsMGlt4N0",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 13000,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "pzm-nNmSUYI",
+      "title": "How to Generate Custom Icon Sets with AI (Using Brand Colors) Recraft Tips & Tricks, Part 3",
+      "url": "https://www.youtube.com/watch?v=pzm-nNmSUYI",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 4400,
+      "topics": [
+        "icons",
+        "branding"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "wWrwFYVI5Yk",
+      "title": "Nano-Banano in Recraft: Google’s New AI Model That Changes Everything",
+      "url": "https://www.youtube.com/watch?v=wWrwFYVI5Yk",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 2100,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "1lanFEx2Jgs",
+      "title": "AI Brand Design Tutorial: Build Consistent Visuals with Your Custom Colors",
+      "url": "https://www.youtube.com/watch?v=1lanFEx2Jgs",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 2000,
+      "topics": [
+        "branding",
+        "consistency",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "974zNrvZZYo",
+      "title": "Create Vectors, Logos & Posters with AI | Recraft New Styles Tutorial",
+      "url": "https://www.youtube.com/watch?v=974zNrvZZYo",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 5000,
+      "topics": [
+        "vectors",
+        "logos",
+        "styles",
+        "posters",
+        "tutorial"
+      ],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "CQslmaaWeyM",
+      "title": "How to generate realistic portraits with AI - Recraft Tips & Tricks, Part 2",
+      "url": "https://www.youtube.com/watch?v=CQslmaaWeyM",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 1000,
+      "topics": [],
+      "topicsSource": "title"
+    },
+    {
+      "videoId": "PNqtm9aLRUw",
+      "title": "How to generate any image and turn it into a mockup — Recraft Tips & Tricks, Part 1",
+      "url": "https://www.youtube.com/watch?v=PNqtm9aLRUw",
+      "kind": "short",
+      "durationSeconds": null,
+      "viewCount": 1900,
+      "topics": [
+        "mockups"
+      ],
+      "topicsSource": "title"
     }
   ]
 }

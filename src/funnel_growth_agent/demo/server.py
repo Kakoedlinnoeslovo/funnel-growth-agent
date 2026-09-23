@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import queue
+import re
 import sys
 import threading
 import time
@@ -17,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib import resources
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from ..config import Settings
 from ..events import Event
@@ -224,7 +225,7 @@ class ConsoleServer(ThreadingHTTPServer):
     def publish_event(self, event: Event) -> None:
         with self.lock:
             self.state.buffer.append(event)
-        self.broadcaster.publish(event.model_dump())
+            self.broadcaster.publish(event.model_dump())
         if event.kind == "proposal_saved":
             self._set_status(
                 "proposed" if event.data.get("decision") == "experiment" else "declined",
@@ -459,10 +460,14 @@ class Handler(BaseHTTPRequestHandler):
             name = "workflow.html" if self.server.state.mode == "live" else "console.html"
             page = resources.files("funnel_growth_agent.demo").joinpath(name)
             self._send(200, page.read_bytes(), "text/html; charset=utf-8")
-        elif path in {"/workflow.js", "/workflow.css"}:
+        elif path in {"/workflow.js", "/workflow.css", "/instrument-sans.woff2"}:
             page = resources.files("funnel_growth_agent.demo").joinpath(path[1:])
-            content_type = "text/javascript" if path.endswith(".js") else "text/css"
-            self._send(200, page.read_bytes(), content_type + "; charset=utf-8")
+            content_type = {
+                ".js": "text/javascript; charset=utf-8",
+                ".css": "text/css; charset=utf-8",
+                ".woff2": "font/woff2",
+            }[Path(path).suffix]
+            self._send(200, page.read_bytes(), content_type)
         elif path.startswith("/api/"):
             self._workflow_api(path, "GET")
         elif path == "/state":
@@ -544,6 +549,8 @@ class Handler(BaseHTTPRequestHandler):
                 parts = path.removeprefix("/api/drafts/").split("/")
                 if len(parts) == 1 and method == "GET":
                     self._json(200, workflow.present(parts[0]))
+                elif len(parts) == 2 and parts[1] == "events" and method == "GET":
+                    self._workflow_sse(workflow, parts[0])
                 elif len(parts) == 3 and parts[1] == "preview" and method == "GET":
                     draft = workflow.load(parts[0])
                     number = int(parts[2])
@@ -559,6 +566,8 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_header("Location", location)
                     self.send_header("Content-Length", "0")
                     self.end_headers()
+                elif len(parts) == 2 and parts[1] == "messages" and method == "POST":
+                    self._json(202, workflow.start_message(parts[0], payload))
                 elif len(parts) == 2 and method == "POST":
                     self._json(202, workflow.start_job(parts[0], parts[1], payload))
                 else:
@@ -568,8 +577,7 @@ class Handler(BaseHTTPRequestHandler):
                 if target is None or not target.is_file():
                     self._json(404, {"error": "Asset unavailable"})
                 else:
-                    mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-                    self._send(200, target.read_bytes(), mime)
+                    self._send_asset(target)
             else:
                 self._json(404, {"error": "Not found"})
         except UploadError as error:
@@ -582,13 +590,81 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as error:
             self._json(500, {"error": str(error)})
 
+    def _workflow_sse(self, workflow, draft_id: str) -> None:
+        query = parse_qs(urlsplit(self.path).query)
+        cursor = max(0, int(self.headers.get("Last-Event-ID") or query.get("after", ["0"])[0]))
+        # Validate before sending headers; the durable sequence is the stream's cursor.
+        workflow.load(draft_id)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+        self.connection.settimeout(20)
+        try:
+            while not workflow.closed:
+                events = workflow.events_after(draft_id, cursor, wait=10)
+                for event in events:
+                    self.wfile.write(f"id: {event['seq']}\ndata: {json.dumps(event)}\n\n".encode())
+                    cursor = event["seq"]
+                if not events:
+                    self.wfile.write(b": heartbeat\n\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            pass
+        finally:
+            self.close_connection = True
+
     def _asset(self, key: str) -> None:
         target = self.server.assets().get(key)
         if target is None or not target.is_file():
             self._json(404, {"error": "no such asset"})
             return
-        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-        self._send(200, target.read_bytes(), content_type)
+        self._send_asset(target)
+
+    def _send_asset(self, target: Path) -> None:
+        """Single-range streaming lets original videos seek without reloading from zero."""
+        size = target.stat().st_size
+        start, end, partial = 0, size - 1, False
+        requested = self.headers.get("Range")
+        if requested:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", requested)
+            if match and any(match.groups()):
+                left, right = match.groups()
+                if left:
+                    start = int(left)
+                    end = min(int(right), size - 1) if right else size - 1
+                else:
+                    start = max(0, size - int(right))
+                partial = 0 <= start <= end < size
+            if not partial:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+        self.send_response(206 if partial else 200)
+        self.send_header(
+            "Content-Type", mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        )
+        self.send_header("Content-Length", str(max(0, end - start + 1)))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "no-store")
+        if partial:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.end_headers()
+        try:
+            with target.open("rb") as handle:
+                handle.seek(start)
+                remaining = end - start + 1
+                while remaining > 0:
+                    chunk = handle.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _sse(self) -> None:
         self.send_response(200)
@@ -596,10 +672,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
-        q = self.server.broadcaster.subscribe()
+        with self.server.lock:
+            q = self.server.broadcaster.subscribe()
+            snapshot = list(self.server.state.buffer)
         try:
             self.wfile.write(frame("state", self.server.state_dict()))
-            for event in self.server.buffer_snapshot():
+            for event in snapshot:
                 self.wfile.write(frame(event.kind, event.model_dump(), event.seq))
             self.wfile.write(b": ready\n\n")
             self.wfile.flush()

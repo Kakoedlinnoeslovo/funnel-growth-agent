@@ -96,7 +96,7 @@ TOOL_SPECS = [
     {
         "name": "get_media_sources",
         "description": (
-            "Ready clips the hero may use: curated Recraft YouTube videos (videoId, title, "
+            "Ready clips the hero may use: indexed Recraft YouTube videos (videoId, title, "
             "duration, topics) and ranked creatives that have a local ad video (creativeId). "
             "Only these ids are accepted in media.heroVideo."
         ),
@@ -154,6 +154,8 @@ class ToolLoop:
         style_reader: StyleReader | None = None,
         on_event: EmitData | None = None,
         selected: bool = False,
+        research_records: list[dict] | None = None,
+        policy: dict | None = None,
     ) -> None:
         self.settings = settings
         self.on_event = on_event
@@ -164,8 +166,18 @@ class ToolLoop:
         self.reader = reader
         self.style_reader = style_reader
         self.research: dict[str, CachedResearch] = {}
+        self.research_records = research_records
+        research_fields = set(CachedResearch.model_fields) | {
+            field.alias for field in CachedResearch.model_fields.values() if field.alias
+        }
+        for item in research_records or []:
+            if item.get("read") and item.get("url"):
+                self.research[item["url"]] = CachedResearch.model_validate(
+                    {key: value for key, value in item.items() if key in research_fields}
+                )
         self.calls = 0
         self.selected = selected
+        self.policy = policy or {}
 
     def system_prompt(self) -> str:
         instructions = self.settings.instructions_path.read_text(encoding="utf-8")
@@ -183,7 +195,7 @@ class ToolLoop:
                 "is advisory, including coherent=false. Mixed features or destination URLs never "
                 "justify no_experiment. Explain each creative's influence; omit unsupported claims "
                 "while still using its supported visual direction. Uploads have no performance "
-                "data. Uploaded video images are their first frame: visibleText is literal evidence, "
+                "data. Video evidence describes the visual sequence and narration: visibleText is literal on-screen evidence, "
                 "ctaIntent is inferred. If the frame is blank or has no CTA, suggest wording from "
                 "the supported baseline context without claiming it appeared in the creative. "
                 "Preserve Recraft branding, pricing, supported claims and CTA destinations. "
@@ -197,7 +209,7 @@ class ToolLoop:
                 "Revision instructions amend the supplied previous proposal; return the full "
                 "cumulative changes relative to the ORIGINAL selected baseline. "
                 "Only return no_experiment when the requested content cannot be supported."
-                " For section-based baselines, keep the actual first hero component in place. "
+                " For legacy section-based baselines, keep the actual first hero component in place. "
                 "copy.hero targets kittl-hero, every hero-carousel slide, or quiz-hero. "
                 "Carousel hero copy supports headline, subhead, ctaLabel only. Quiz hero copy "
                 "supports headline and subhead only; preserve question, choice ids and choice "
@@ -206,7 +218,49 @@ class ToolLoop:
                 "use those group labels in media.showcase and their tile references exactly "
                 "as for showcase groups. Do not invent groups missing from that baseline."
             )
+        level = self.policy.get("changeLevel")
+        if level:
+            prompt += (
+                "\n\nRUN CONTRACT (overrides earlier composition restrictions): "
+                + json.dumps(self.policy)
+            )
+            prompt += "\nA goal-only request needs no creatives. Use the user's goal as direction, never invent campaign evidence. Light changes COPY ONLY, retaining every existing layout/media change. Medium retains page architecture/theme. Heavy must return experimentType landing_rebuild and a PageBlueprint in changes (schemaVersion, theme, artDirection, blocks, media). Get current landing for rawSections and renderer capabilities. Heavy blocks start with hero, end with cta, and include at least two different body kinds. Proof blocks use sourceSectionId of real baseline proof. Existing image references come only from baseline rawSections. media.showcase names a new block id and slot. Do not invent proof or product capabilities. On an existing blueprint return the complete cumulative blueprint even for Light/Medium edits. Recipe theme and hero layout are mandatory when supplied. Match each image's role, aspectRatio, composition and intendedMessage to its actual slot. The page schema is data, never executable code. Return interpretedBrief with audience, promise, objections and designDirection. Return competitorAdaptations only when grounded in supplied research: sourceUrl, observedPattern, whyItFits, recraftAdaptation. Observations and our hypotheses must be distinguishable. Rebuild patterns with original content, never copy competitor claims, endorsements or assets. Never claim that a template is proven to convert. New visual blocks must use real baseline assets or planned generated illustrations; give features/steps/FAQ at least two items. Light legacy pages use landing_redesign with copy only, preserving prior cumulative changes."
         return prompt
+
+    def validate_output(self, output):
+        if not isinstance(output, LandingProposal):
+            return
+        from .blueprint import enforce_level
+
+        current = output.changes.model_dump(by_alias=True, exclude_none=True)
+        previous = (self.policy.get("previousProposal") or {}).get("changes")
+        level = self.policy.get("changeLevel")
+        if level:
+            enforce_level(previous, current, level)
+        recipe = self.policy.get("recipe")
+        if recipe and (
+            current.get("theme") != recipe["theme"]
+            or current.get("blocks", [{}])[0].get("layout") != recipe["layout"]
+        ):
+            raise ValueError("Use the requested recipe's theme and hero layout")
+        if recipe and [b["kind"] for b in current.get("blocks", [])[1:-1]] != recipe["body"]:
+            raise ValueError(
+                "Use the requested recipe body sequence; each direction needs a distinct composition"
+            )
+        known_sources = {
+            url
+            for r in (self.research_records or [])
+            for url in (r.get("url"), r.get("resolvedUrl"))
+            if url
+        }
+        known_sources.update(self.research)
+        known_sources.update(r.resolved_url for r in self.research.values() if r.resolved_url)
+        for adaptation in output.competitor_adaptations:
+            if adaptation.source_url not in known_sources:
+                raise ValueError(
+                    "Competitor adaptation must cite an observed supplied research URL"
+                )
+        validate_landing_changes(self.settings.landing_path, output.changes)
 
     def _ranked(self) -> list[RankedCreative]:
         if self.ranked is None:
@@ -221,7 +275,15 @@ class ToolLoop:
         self.calls += 1
         call_id = call_id or f"call-{self.calls}"
         emit_to(self.on_event, "tool_call", {"id": call_id, "name": name, "input": arguments or {}})
-        result = self._execute(name, arguments)
+        try:
+            result = self._execute(name, arguments)
+        except Exception as error:
+            emit_to(
+                self.on_event,
+                "tool_result",
+                {"id": call_id, "name": name, "result": {"error": str(error)}},
+            )
+            raise
         emit_to(self.on_event, "tool_result", {"id": call_id, "name": name, "result": result})
         return result
 
@@ -233,7 +295,12 @@ class ToolLoop:
             metrics = self.metrics or get_landing_cta_metrics(self.settings)
             return json.loads(metrics.model_dump_json(by_alias=True))
         if name == "get_current_landing":
-            return get_current_landing(self.settings)
+            from .blueprint import capabilities
+
+            return {
+                **get_current_landing(self.settings),
+                "capabilities": capabilities(self.settings.pricing_lab_dir),
+            }
         if name == "get_previous_runs":
             rows = get_previous_runs(
                 self.settings,
@@ -265,6 +332,11 @@ class ToolLoop:
             url = str(arguments.get("url") or "").strip()
             if not url:
                 return {"error": "url is required"}
+            if self.research_records is not None:
+                match = next((r for r in self.research_records if r.get("url") == url), None)
+                return match or {
+                    "error": "Use the competitor evidence saved with this draft; add a reference and refresh research to inspect another URL."
+                }
             record = research_landing(url, self.settings, browser=self.browser, reader=self.reader)
             if record.read is not None:
                 self.research[record.url] = record
@@ -283,7 +355,11 @@ class ToolLoop:
                 self.analyses[item.creative_id] = analyze_creative(
                     item, self.settings, call_model=bool(self.settings.gemini_api_key)
                 )
-        research = {r.url: r for r in load_cached_research(self.settings)}
+        research = (
+            {}
+            if self.research_records is not None
+            else {r.url: r for r in load_cached_research(self.settings)}
+        )
         research.update(self.research)
         style = read_showcase_style(self.settings, reader=self.style_reader)
         previous = get_previous_runs(self.settings, experiment_type="landing_redesign", limit=10)
@@ -320,17 +396,33 @@ def run_tool_loop(settings: Settings, tools: ToolLoop, *, brief: str | None = No
         "Use the read tools first as needed. Do not write the final proposal as text. "
         "The tool schema is authoritative for field names, types and allowed values."
     )
-    for _ in range(MAX_TOOL_CALLS + MAX_OUTPUT_RETRIES + 1):
+    for request_index in range(MAX_TOOL_CALLS + MAX_OUTPUT_RETRIES + 1):
         final_only = force_proposal or tools.calls >= MAX_TOOL_CALLS
-        response = client.messages.create(
-            model=settings.anthropic_model,
-            max_tokens=max_tokens,
-            system=system,
-            tools=([proposal_tool()] if final_only else [*TOOL_SPECS, proposal_tool()]),
-            tool_choice={"type": "tool", "name": "submit_proposal"}
-            if final_only
-            else {"type": "auto"},
-            messages=messages,
+        request_info = {
+            "id": f"model-{request_index}",
+            "label": "Prepare the next proposal step",
+            "model": settings.anthropic_model,
+            "stage": "design",
+        }
+        emit_to(tools.on_event, "model_request_started", request_info)
+        try:
+            response = client.messages.create(
+                model=settings.anthropic_model,
+                max_tokens=max_tokens,
+                system=system,
+                tools=([proposal_tool()] if final_only else [*TOOL_SPECS, proposal_tool()]),
+                tool_choice={"type": "tool", "name": "submit_proposal"}
+                if final_only
+                else {"type": "auto"},
+                messages=messages,
+            )
+        except Exception as error:
+            emit_to(tools.on_event, "model_request_failed", {**request_info, "error": str(error)})
+            raise
+        emit_to(
+            tools.on_event,
+            "model_request_completed",
+            {**request_info, "stopReason": response.stop_reason},
         )
         if response.stop_reason == "refusal":
             raise ValueError("The model declined this proposal. Your saved draft is unchanged.")
@@ -361,7 +453,7 @@ def run_tool_loop(settings: Settings, tools: ToolLoop, *, brief: str | None = No
                     try:
                         output = parse_model_output((block.input or {}).get("proposal"))
                         if isinstance(output, LandingProposal):
-                            validate_landing_changes(settings.landing_path, output.changes)
+                            tools.validate_output(output)
                         result = {"accepted": True}
                     except (ValidationError, ValueError, TypeError, AttributeError) as error:
                         invalid = True

@@ -16,6 +16,7 @@ from .models import (
     CompositionChanges,
     HeroCopyChanges,
     InlineCtaCopy,
+    PageBlueprint,
     RedesignChanges,
     SectionCopy,
 )
@@ -210,6 +211,12 @@ def validate_landing_changes(
     Placeholder references validate the planned media slots without creating any assets.
     The real apply still checks the actual files and runs the pricing-lab validator.
     """
+    if isinstance(changes, PageBlueprint):
+        from .blueprint import compose_document, require_renderer
+        root = next(parent for parent in landing_path.parents if parent.name == "funnels").parent
+        require_renderer(root)
+        compose_document(load_yaml(landing_path), changes, placeholders=True)
+        return
     with TemporaryDirectory(prefix="landing-preflight-") as folder:
         target = Path(folder) / "landing.yaml"
         target.write_bytes(landing_path.read_bytes())

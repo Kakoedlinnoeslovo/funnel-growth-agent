@@ -147,7 +147,7 @@ def test_landing_redesign_parses_all_groups() -> None:
     assert changes.layout.layout == "video-first"
     assert changes.composition.omit == ["style-switcher", "inline-cta-2"]
     assert changes.media.hero_video.stem == "hero-youtube-z0r74lakhom-30-120"
-    assert changes.media.showcase[0].tile_model == "nano_banana_pro"
+    assert changes.media.showcase[0].tile_model == "nano_banana_2"
     assert changes.media.showcase[0].references == ["tile:Vectors:1"]
     dumped = proposal.model_dump(by_alias=True, exclude_none=True)
     assert "copy" in dumped["changes"] and "heroVideo" in dumped["changes"]["media"]
@@ -246,8 +246,8 @@ def test_legacy_showcase_rows_still_parse() -> None:
     plan = ShowcaseImagePlan.model_validate(LEGACY_TILE)
     assert plan.tile_model == "nano_banana_2"
     assert plan.prompt == LEGACY_TILE["prompt"] and plan.brief is None
-    assert not hasattr(plan, "aspect_ratio")
-    assert "aspectRatio" not in plan.model_dump(by_alias=True)
+    assert plan.aspect_ratio == "16:9"
+    assert plan.model_dump(by_alias=True)["aspectRatio"] == "16:9"
     with pytest.raises(ValidationError, match="unknown route"):
         ShowcaseImagePlan.model_validate({**LEGACY_TILE, "route": "dalle"})
 
@@ -257,7 +257,7 @@ def test_showcase_brief_rules() -> None:
     from redesign_helpers import BRIEF_TILE
 
     plan = ShowcaseImagePlan.model_validate(BRIEF_TILE)
-    assert plan.tile_model == "nano_banana_pro" and plan.lettering_text is None
+    assert plan.tile_model == "nano_banana_2" and plan.lettering_text is None
     with pytest.raises(ValidationError, match="exactly one of brief or prompt"):
         ShowcaseImagePlan.model_validate({**BRIEF_TILE, "prompt": "x" * 30})
     with pytest.raises(ValidationError, match="exactly one of brief or prompt"):
@@ -274,8 +274,7 @@ def test_showcase_brief_rules() -> None:
         ShowcaseImagePlan.model_validate(
             {**BRIEF_TILE, "references": ["tile:Vectors:1", "tile:Vectors:1"]}
         )
-    with pytest.raises(ValidationError, match="takes no references"):
-        ShowcaseImagePlan.model_validate({**BRIEF_TILE, "model": "nano_banana_2"})
+    assert ShowcaseImagePlan.model_validate({**BRIEF_TILE, "model": "nano_banana_2"}).references
     assert ShowcaseImagePlan.model_validate({**BRIEF_TILE, "medium": "ugc-candid"}).medium
     assert ShowcaseImagePlan.model_validate({**BRIEF_TILE, "medium": "device-screen"}).medium
     with pytest.raises(ValidationError):

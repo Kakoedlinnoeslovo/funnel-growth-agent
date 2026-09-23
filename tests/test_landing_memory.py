@@ -40,7 +40,8 @@ def test_current_landing_exposes_section_ids_and_group_labels(settings) -> None:
         {"label": "Photos", "imageCount": 3},
     ]
     assert landing["mobile"] == "phone-first"
-    assert "assets/" not in str(landing)
+    assert "assets/" not in str(landing["sections"])
+    assert landing["rawSections"][2]["groups"][0]["images"][0].startswith("assets/")
 
 
 def test_previous_runs_always_include_evaluation_and_learning(settings) -> None:
